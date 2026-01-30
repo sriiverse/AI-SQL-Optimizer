@@ -21,7 +21,8 @@ def generate_sql_with_gemini(schema: str, question: str) -> TextToSqlResponse:
     
     Question: {question}
     
-    Task: Generate a valid SQL query to answer the question based on the schema.
+    Task: Generate a valid PostgreSQL query to answer the question based on the schema.
+    Use standard PostgreSQL syntax (e.g., use 'EXTRACT(YEAR FROM date)' instead of 'strftime').
     Also provide a brief explanation of how the query works.
     
     Output format provided as plain text logic, but structured as:

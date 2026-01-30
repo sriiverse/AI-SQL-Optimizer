@@ -11,7 +11,7 @@ def generate_sql_with_gemini(schema: str, question: str) -> TextToSqlResponse:
         raise ValueError("GEMINI_API_KEY environment variable not set")
         
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = f"""
     You are an expert SQL Generator.

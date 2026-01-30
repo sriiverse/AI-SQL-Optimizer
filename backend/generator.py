@@ -11,7 +11,7 @@ def generate_sql_with_gemini(schema: str, question: str) -> TextToSqlResponse:
         raise ValueError("GEMINI_API_KEY environment variable not set")
         
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     You are an expert SQL Generator.
@@ -77,7 +77,10 @@ def generate_sql_with_gemini(schema: str, question: str) -> TextToSqlResponse:
 
     except Exception as e:
         print(f"Gemini Error: {e}")
-        return generate_sql_demo(schema, question)
+        return TextToSqlResponse(
+            query="ERROR",
+            explanation=f"AI Generation Failed: {str(e)}"
+        )
 
 def generate_sql_demo(schema: str, question: str) -> TextToSqlResponse:
     """

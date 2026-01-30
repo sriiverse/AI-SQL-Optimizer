@@ -39,20 +39,7 @@ app.add_middleware(
 async def root():
     return {"status": "ok", "message": "SQL Optimizer API is running"}
 
-@app.get("/debug-models")
-async def debug_models():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return {"error": "GEMINI_API_KEY not set"}
-    try:
-        genai.configure(api_key=api_key)
-        models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                models.append(m.name)
-        return {"available_models": models}
-    except Exception as e:
-        return {"error": str(e)}
+
 
 @app.post("/analyze", response_model=AnalysisResult)
 async def analyze_query_endpoint(request: AnalyzeRequest):

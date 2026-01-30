@@ -8,7 +8,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import google.generativeai as genai
+
 app = FastAPI(title="AI SQL Optimizer")
+
+@app.on_event("startup")
+async def startup_event():
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+            print("--- DEBUG: CHECKING AVAILABLE MODELS ---")
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    print(f"Model: {m.name}")
+            print("--- DEBUG: END MODEL CHECK ---")
+        except Exception as e:
+            print(f"DEBUG Error listing models: {e}")
 
 # Configure CORS for frontend
 app.add_middleware(

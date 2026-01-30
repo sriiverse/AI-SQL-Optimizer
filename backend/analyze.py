@@ -13,7 +13,7 @@ def analyze_query_with_gemini(query: str) -> AnalysisResult:
         raise ValueError("GEMINI_API_KEY environment variable not set")
         
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     You are an expert PostgreSQL Database Administrator. Analyze the following SQL query for performance issues.
@@ -84,8 +84,14 @@ def analyze_query_with_gemini(query: str) -> AnalysisResult:
         
     except Exception as e:
         print(f"Gemini Error: {e}")
-        # Fallback to demo if AI fails
-        return analyze_query_demo(query)
+        # Return Error Result
+        return AnalysisResult(
+            original_query=query,
+            execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
+            suggestions=[],
+            optimized_query="ERROR",
+            explanation=f"AI Analysis Failed: {str(e)}"
+        )
 
 def analyze_query_demo(query: str) -> AnalysisResult:
     """

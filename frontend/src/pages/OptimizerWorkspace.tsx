@@ -4,7 +4,7 @@ import { Button } from "../components/ui/button"
 import { SqlEditor } from "../components/SqlEditor"
 import { AnalysisResults } from "../components/AnalysisResults"
 import { GeneratorResults } from "../components/GeneratorResults"
-import { ArrowLeft, Play, Wand2, Database, Sparkles, Copy, Check } from "lucide-react"
+import { ArrowLeft, Play, Wand2, Database, Sparkles } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 
 interface OptimizerWorkspaceProps {
@@ -99,8 +99,8 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                 key={d.id}
                                 onClick={() => setDialect(d.id)}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-300 ${dialect === d.id
-                                        ? "bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-blue-200 border border-blue-500/30 shadow-[0_0_10px_rgba(59,130,246,0.2)]"
-                                        : "text-gray-400 hover:bg-white/5 hover:text-gray-200"
+                                    ? "bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-blue-200 border border-blue-500/30 shadow-[0_0_10px_rgba(59,130,246,0.2)]"
+                                    : "text-gray-400 hover:bg-white/5 hover:text-gray-200"
                                     }`}
                             >
                                 <span>{d.icon}</span>

@@ -4,7 +4,7 @@ import os
 import json
 import google.generativeai as genai
 
-def analyze_query_with_gemini(query: str) -> AnalysisResult:
+def analyze_query_with_gemini(query: str, dialect: str = "postgresql") -> AnalysisResult:
     """
     Uses Google Gemini to analyze the SQL query and provide optimization suggestions.
     """
@@ -16,7 +16,7 @@ def analyze_query_with_gemini(query: str) -> AnalysisResult:
     model = genai.GenerativeModel('gemini-flash-latest')
     
     prompt = f"""
-    You are an expert PostgreSQL Database Administrator. Analyze the following SQL query for performance issues.
+    You are an expert {dialect} Database Administrator. Analyze the following SQL query for performance issues.
     
     Query: {query}
     

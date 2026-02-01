@@ -2,20 +2,117 @@
 
 ![System Architecture](./assets/system_architecture.png)
 
-## 🏗️ System Architecture
-The application follows a **Hybrid Cloud Architecture** leveraging the best of modern tech:
+[![Status](https://img.shields.io/badge/Status-Active-success?style=flat-square)]()
+[![Stack](https://img.shields.io/badge/Stack-React_|_FastAPI_|_Gemini-blueviolet?style=flat-square)]()
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)]()
 
-*   **Frontend:** React (Vite) + Tailwind CSS + Framer Motion. Hosted on **Netlify** for global CDN performance.
-*   **Backend:** FastAPI (Python) running on **Render**. Handles API orchestration and prompt engineering.
-*   **AI Engine:** **Google Gemini Pro / Flash**. The core intelligence that parses SQL execution plans and generates optimization advice.
-
-### Key Workflows
-1.  **SQL Analysis:** User Input -> Backend -> DBA Persona Prompt -> Gemini Analysis -> Structured JSON Report.
-2.  **Text-to-SQL:** User Question -> Backend -> Schema Injection -> Gemini Generation -> Valid SQL.
+A professional-grade database engineering tool that leverages **Google Gemini AI** to analyze SQL execution plans, identify bottlenecks, and generate optimized queries for **PostgreSQL**, **MySQL**, and **SQLite**.
 
 ---
 
-![Project Status](https://img.shields.io/badge/Status-Active-success)
+## ✨ Features
+
+### 🔍 Intelligent Optimization
+*   **Static Analysis:** Identify full table scans, missing indexes, and `SELECT *` anti-patterns.
+*   **AI Insights:** Uses `gemini-flash-latest` to act as an expert DBA, explaining *why* a query is slow.
+*   **Dialect Aware:** Generates optimization advice specific to your database engine (Postgres vs MySQL).
+
+### ✍️ Text-to-SQL Generator
+*   **Natural Language:** "Find users who ordered last week" -> `SELECT ...`
+*   **Schema Aware:** Injects your table definitions into the context to prevent hallucinations.
+*   **Multi-Dialect:** Supports syntax for Postgres (`EXTRACT`), MySQL (`DATE_ADD`), and SQLite (`strftime`).
+
+### 🛡️ Enterprise Ready
+*   **Secure:** API Keys are handled via Environment Variables (never stored in code).
+*   **Fail-Safe:** Graceful error handling with explicit feedback on Quota limits.
+*   **Modern UI:** "Cosmic Dark" theme with glassmorphism, animations, and responsive design.
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+*   Node.js (v18+)
+*   Python (v3.9+)
+*   Google Gemini API Key ([Get one here](https://aistudio.google.com/))
+
+### 1. Clone & Install
+```bash
+git clone https://github.com/sriiverse/AI-SQL-Optimizer.git
+cd AI-SQL-Optimizer
+```
+
+### 2. Backend Setup
+```bash
+cd backend
+pip install -r requirements.txt
+# Create .env file (See .env.example)
+echo "GEMINI_API_KEY=your_key_here" > .env
+python main.py
+```
+*Server runs at `http://localhost:8000`*
+
+### 3. Frontend Setup
+```bash
+cd frontend
+npm install
+npm run dev
+```
+*App runs at `http://localhost:5173`*
+
+---
+
+## 💡 Example Workflows
+
+### Scenario 1: Optimizing a Slow Query
+**Input:**
+```sql
+SELECT * FROM orders WHERE DATE(created_at) = '2023-01-01'
+```
+**AI Analysis:**
+> *"Using a function like `DATE()` on a column prevents index usage (SARGable violation). This causes a Full Table Scan."*
+
+**Optimized Output (PostgreSQL):**
+```sql
+SELECT * FROM orders 
+WHERE created_at >= '2023-01-01 00:00:00' 
+  AND created_at < '2023-01-02 00:00:00';
+```
+
+### Scenario 2: Generating Reports
+**Question:** *"Show me top 5 customers by speed of payment"*
+**Schema Context:** `payments (amount, date, customer_id)`, `customers (id, name)`
+**AI Output:**
+```sql
+SELECT c.name, AVG(p.date - o.order_date) as avg_payment_speed
+FROM customers c
+JOIN payments p ON c.id = p.customer_id
+GROUP BY c.id
+ORDER BY avg_payment_speed ASC
+LIMIT 5;
+```
+
+---
+
+## 🔒 Privacy & Data Safety
+
+This application sends data to **Google's Generative AI API**.
+*   **What is sent:** The SQL Query, Table Schema, and Natural Language Question you provide.
+*   **What is NOT sent:** Database credentials, connection strings, or actual row data (unless you paste row data into the schema box).
+*   **Recommendation:** Use randomized/anonymized table names (e.g., `table_a`) if your schema contains highly sensitive trade secrets.
+
+---
+
+## 🏗️ System Architecture
+The application follows a **Hybrid Cloud Architecture**:
+*   **Frontend:** React (Vite) + Tailwind CSS + Framer Motion. Hosted on **Netlify**.
+*   **Backend:** FastAPI (Python) running on **Render**.
+*   **AI Engine:** **Google Gemini Flash**.
+
+---
+
+## 🛠️ Deployment
+See the [Deployment Guide](./deployment_guide.md) for detailed instructions on deploying to **Render** and **Netlify**.
 ![Tech Stack](https://img.shields.io/badge/Stack-React_|_FastAPI_|_Gemini_Pro-blueviolet)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 

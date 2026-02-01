@@ -1,4 +1,19 @@
-# 🚀 AI-Powered SQL Optimizer & Generator
+# 🚀 AI-Powered SQL Query Optimizer & Generator
+
+![System Architecture](file:///C:/Users/Sudha/.gemini/antigravity/brain/56194641-51b7-42fb-9905-4a6ec55bb32b/system_architecture_diagram_1769961308131.png)
+
+## 🏗️ System Architecture
+The application follows a **Hybrid Cloud Architecture** leveraging the best of modern tech:
+
+*   **Frontend:** React (Vite) + Tailwind CSS + Framer Motion. Hosted on **Netlify** for global CDN performance.
+*   **Backend:** FastAPI (Python) running on **Render**. Handles API orchestration and prompt engineering.
+*   **AI Engine:** **Google Gemini Pro / Flash**. The core intelligence that parses SQL execution plans and generates optimization advice.
+
+### Key Workflows
+1.  **SQL Analysis:** User Input -> Backend -> DBA Persona Prompt -> Gemini Analysis -> Structured JSON Report.
+2.  **Text-to-SQL:** User Question -> Backend -> Schema Injection -> Gemini Generation -> Valid SQL.
+
+---
 
 ![Project Status](https://img.shields.io/badge/Status-Active-success)
 ![Tech Stack](https://img.shields.io/badge/Stack-React_|_FastAPI_|_Gemini_Pro-blueviolet)

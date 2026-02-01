@@ -284,6 +284,21 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                     background: rgba(255, 255, 255, 0.3);
                 }
             `}</style>
+
+            {/* Privacy Disclaimer */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-2xl px-6 pointer-events-none">
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 1 }}
+                    className="bg-black/80 backdrop-blur-md border border-yellow-500/20 rounded-full px-4 py-2 flex items-center justify-between shadow-2xl pointer-events-auto"
+                >
+                    <div className="flex items-center gap-3 text-xs text-gray-400">
+                        <span className="text-yellow-500">⚠️</span>
+                        <span>Your schema is sent to Google Gemini for analysis. <strong>Avoid sharing real PII.</strong></span>
+                    </div>
+                </motion.div>
+            </div>
         </div>
     )
 }

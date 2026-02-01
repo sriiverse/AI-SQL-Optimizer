@@ -45,7 +45,7 @@ async def root():
 async def analyze_query_endpoint(request: AnalyzeRequest):
     try:
         if os.environ.get("GEMINI_API_KEY"):
-            return analyze_query_with_gemini(request.query)
+            return analyze_query_with_gemini(request.query, request.dialect)
         else:
             return analyze_query_demo(request.query)
     except Exception as e:
@@ -55,7 +55,7 @@ async def analyze_query_endpoint(request: AnalyzeRequest):
 async def generate_sql_endpoint(request: TextToSqlRequest):
     try:
         if os.environ.get("GEMINI_API_KEY"):
-            return generate_sql_with_gemini(request.schema_def, request.question)
+            return generate_sql_with_gemini(request.schema_def, request.question, request.dialect)
         else:
             return generate_sql_demo(request.schema_def, request.question)
     except Exception as e:

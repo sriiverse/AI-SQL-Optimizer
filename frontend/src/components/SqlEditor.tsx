@@ -26,7 +26,7 @@ export function SqlEditor({ value, onChange, readOnly = false }: SqlEditorProps)
     }, [monaco])
 
     return (
-        <div className="h-full w-full border rounded-md overflow-hidden bg-card">
+        <div className="h-full w-full border border-white/10 rounded-lg overflow-hidden bg-black/50">
             <Editor
                 height="100%"
                 defaultLanguage="sql"

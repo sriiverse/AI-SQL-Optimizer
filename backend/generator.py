@@ -2,7 +2,7 @@ from models import TextToSqlResponse
 import os
 import google.generativeai as genai
 
-def generate_sql_with_gemini(schema: str, question: str) -> TextToSqlResponse:
+def generate_sql_with_gemini(schema: str, question: str, dialect: str = "postgresql") -> TextToSqlResponse:
     """
     Uses Google Gemini to generate SQL from natural language + schema.
     """
@@ -21,8 +21,8 @@ def generate_sql_with_gemini(schema: str, question: str) -> TextToSqlResponse:
     
     Question: {question}
     
-    Task: Generate a valid PostgreSQL query to answer the question based on the schema.
-    Use standard PostgreSQL syntax (e.g., use 'EXTRACT(YEAR FROM date)' instead of 'strftime').
+    Task: Generate a valid {dialect} query to answer the question based on the schema.
+    Use standard {dialect} syntax.
     Also provide a brief explanation of how the query works.
     
     Output format provided as plain text logic, but structured as:

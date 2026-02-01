@@ -4,6 +4,7 @@ from typing import List, Optional, Any, Dict
 class AnalyzeRequest(BaseModel):
     query: str
     schema_context: Optional[str] = None
+    dialect: str = "postgresql"
 
 class PlanNode(BaseModel):
     node_type: str
@@ -28,6 +29,7 @@ class AnalysisResult(BaseModel):
 class TextToSqlRequest(BaseModel):
     schema_def: str
     question: str
+    dialect: str = "postgresql"
 
 class TextToSqlResponse(BaseModel):
     query: str

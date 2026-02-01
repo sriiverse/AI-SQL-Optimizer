@@ -31,3 +31,19 @@ jobs:
         GEMINI_API_KEY: "mock_key_for_ci"
       run: |
         python -m pytest tests/
+
+  frontend-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 18
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      - name: Install Dependencies
+        run: npm ci
+      - name: Build Project
+        run: npm run build

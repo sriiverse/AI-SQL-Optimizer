@@ -1,6 +1,6 @@
 # 🚀 AI-Powered SQL Query Optimizer & Generator
 
-![System Architecture](file:///C:/Users/Sudha/.gemini/antigravity/brain/56194641-51b7-42fb-9905-4a6ec55bb32b/system_architecture_diagram_1769961308131.png)
+![System Architecture](./assets/system_architecture.png)
 
 ## 🏗️ System Architecture
 The application follows a **Hybrid Cloud Architecture** leveraging the best of modern tech:

@@ -2,17 +2,11 @@ from models import TextToSqlResponse
 import os
 import google.generativeai as genai
 
-def generate_sql_with_gemini(schema: str, question: str, dialect: str = "postgresql") -> TextToSqlResponse:
+async def generate_sql_with_gemini(schema: str, question: str, dialect: str, model: genai.GenerativeModel) -> TextToSqlResponse:
     """
-    Uses Google Gemini to generate SQL from natural language + schema.
+    Uses a pre-initialized Google Gemini model to generate SQL from natural language + schema.
+    Runs asynchronously to avoid blocking the FastAPI event loop.
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable not set")
-        
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-flash-latest')
-    
     prompt = f"""
     You are an expert SQL Generator.
     
@@ -33,10 +27,10 @@ def generate_sql_with_gemini(schema: str, question: str, dialect: str = "postgre
     """
     
     try:
-        response = model.generate_content(prompt)
+        # Use async generation to avoid blocking the event loop
+        response = await model.generate_content_async(prompt)
         text = response.text.strip()
         
-        # Simple parsing logic (robustness could be improved)
         sql_part = ""
         exp_part = ""
         
@@ -58,15 +52,13 @@ def generate_sql_with_gemini(schema: str, question: str, dialect: str = "postgre
             elif current_section == "exp":
                 exp_part += line + " "
                 
-        # Fallback if parsing fails (Gemini might return just the SQL or different format)
+        # Fallback if parsing fails
         if not sql_part:
-            # Assume code block or raw text is the answer if short
-            # This is a simplification for the demo
             if "select" in text.lower():
                 sql_part = text
                 exp_part = "Generated based on your question."
             else:
-                 return generate_sql_demo(schema, question) # Fallback
+                return generate_sql_demo(schema, question)
 
         # Clean SQL
         sql_part = sql_part.replace("```sql", "").replace("```", "").strip()
@@ -85,11 +77,9 @@ def generate_sql_with_gemini(schema: str, question: str, dialect: str = "postgre
 
 def generate_sql_demo(schema: str, question: str) -> TextToSqlResponse:
     """
-    Simulates Text-to-SQL generation.
+    Simulates Text-to-SQL generation for demo/fallback mode.
     """
-    # Simple placeholder logic
-    
-    generated_sql = "SELECT * FROM users WHERE active = true;" # Default fallback
+    generated_sql = "SELECT * FROM users WHERE active = true;"
     explanation = "I analyzed the schema and identified the 'users' table. I filtered by 'active = true' based on your question."
 
     if "sales" in question.lower():

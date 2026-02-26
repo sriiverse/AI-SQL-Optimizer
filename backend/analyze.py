@@ -4,17 +4,11 @@ import os
 import json
 import google.generativeai as genai
 
-def analyze_query_with_gemini(query: str, dialect: str = "postgresql") -> AnalysisResult:
+async def analyze_query_with_gemini(query: str, dialect: str, model: genai.GenerativeModel) -> AnalysisResult:
     """
-    Uses Google Gemini to analyze the SQL query and provide optimization suggestions.
+    Uses a pre-initialized Google Gemini model to analyze the SQL query.
+    Runs asynchronously to avoid blocking the FastAPI event loop.
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable not set")
-        
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-flash-latest')
-    
     prompt = f"""
     You are an expert {dialect} Database Administrator. Analyze the following SQL query for performance issues.
     
@@ -24,8 +18,8 @@ def analyze_query_with_gemini(query: str, dialect: str = "postgresql") -> Analys
     {{
         "execution_plan_summary": {{
             "node_type": "Primary operation (e.g., Seq Scan, Index Scan)",
-            "cost": 123.45 (estimated float),
-            "rows": 100 (estimated integer),
+            "cost": 123.45,
+            "rows": 100,
             "relation_name": "Table name involved"
         }},
         "suggestions": [
@@ -44,17 +38,20 @@ def analyze_query_with_gemini(query: str, dialect: str = "postgresql") -> Analys
     """
     
     try:
-        response = model.generate_content(prompt)
+        # Use async generation to avoid blocking the event loop
+        response = await model.generate_content_async(prompt)
         text = response.text.strip()
+
         # Clean up if model adds markdown formatting
         if text.startswith("```json"):
             text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
         if text.endswith("```"):
             text = text[:-3]
             
-        data = json.loads(text)
+        data = json.loads(text.strip())
         
-        # Construct PlanNode
         plan_data = data.get("execution_plan_summary", {})
         root_node = PlanNode(
             node_type=plan_data.get("node_type", "Unknown Scan"),
@@ -63,7 +60,6 @@ def analyze_query_with_gemini(query: str, dialect: str = "postgresql") -> Analys
             relation_name=plan_data.get("relation_name", "unknown")
         )
         
-        # Construct Suggestions
         suggestions_data = data.get("suggestions", [])
         suggestions = [
             Suggestion(
@@ -84,7 +80,6 @@ def analyze_query_with_gemini(query: str, dialect: str = "postgresql") -> Analys
         
     except Exception as e:
         print(f"Gemini Error: {e}")
-        # Return Error Result
         return AnalysisResult(
             original_query=query,
             execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
@@ -98,11 +93,8 @@ def analyze_query_demo(query: str) -> AnalysisResult:
     Simulates a PostgreSQL EXPLAIN ANALYZE result and AI optimization suggestions.
     This allows the portfolio project to be demonstrated without a live DB connection or API key.
     """
-    
-    # Simple heuristic to make the demo feel "real"
     query_lower = query.lower()
     
-    # 1. Simulate an Execution Plan
     root_node = PlanNode(
         node_type="Seq Scan" if "where" not in query_lower or "select *" in query_lower else "Index Scan",
         cost=1250.0 if "select *" in query_lower else 45.0,
@@ -110,7 +102,6 @@ def analyze_query_demo(query: str) -> AnalysisResult:
         relation_name="users" if "users" in query_lower else "unknown_table",
     )
     
-    # 2. Generate Suggestions based on simple heuristics
     suggestions = []
     
     if "select *" in query_lower:
@@ -137,7 +128,6 @@ def analyze_query_demo(query: str) -> AnalysisResult:
             sql_snippet="to_tsvector(...)"
         ))
 
-    # Fallback suggestion if query looks okay
     if not suggestions:
         suggestions.append(Suggestion(
             title="Query looks efficient",

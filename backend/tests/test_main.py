@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from main import app
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 client = TestClient(app)
 
@@ -35,35 +35,40 @@ def test_read_root():
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "message": "SQL Optimizer API is running"}
 
-@patch("main.analyze_query_with_gemini")
-def test_analyze_endpoint_mock(mock_analyze):
-    # Setup mock
+def test_health_endpoint():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+@patch("main.analyze_query_with_gemini", new_callable=AsyncMock)
+@patch("main.get_model")
+def test_analyze_endpoint_mock(mock_get_model, mock_analyze):
+    # Return a fake model so the AI branch is triggered
+    mock_get_model.return_value = MagicMock()
     mock_analyze.return_value = MOCK_ANALYZE_RESPONSE
-    
-    # Mock Config
-    with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
-        response = client.post("/analyze", json={
-            "query": "SELECT * FROM users",
-            "dialect": "postgresql"
-        })
-        
+
+    response = client.post("/analyze", json={
+        "query": "SELECT * FROM users",
+        "dialect": "postgresql"
+    })
+
     assert response.status_code == 200
     data = response.json()
     assert data["original_query"] == "SELECT * FROM users"
     assert len(data["suggestions"]) == 1
 
-@patch("main.generate_sql_with_gemini")
-def test_generate_endpoint_mock(mock_generate):
-    # Setup mock
+@patch("main.generate_sql_with_gemini", new_callable=AsyncMock)
+@patch("main.get_model")
+def test_generate_endpoint_mock(mock_get_model, mock_generate):
+    # Return a fake model so the AI branch is triggered
+    mock_get_model.return_value = MagicMock()
     mock_generate.return_value = MOCK_GENERATOR_RESPONSE
-    
-    # Mock Config
-    with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
-        response = client.post("/generate-sql", json={
-            "schema_def": "CREATE TABLE users (id INT)",
-            "question": "Get all users",
-            "dialect": "mysql"
-        })
-            
+
+    response = client.post("/generate-sql", json={
+        "schema_def": "CREATE TABLE users (id INT)",
+        "question": "Get all users",
+        "dialect": "mysql"
+    })
+
     assert response.status_code == 200
     assert response.json()["query"] == "SELECT * FROM users"

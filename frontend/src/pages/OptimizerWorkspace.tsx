@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "../components/ui/button"
-import { SqlEditor } from "../components/SqlEditor"
 import { AnalysisResults } from "../components/AnalysisResults"
 import { GeneratorResults } from "../components/GeneratorResults"
 import { ArrowLeft, Play, Wand2, Database, Sparkles, ShieldAlert } from "lucide-react"
@@ -230,7 +229,13 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                     <Database className="h-4 w-4" />
                                     {isMongo ? "MongoDB Query / Pipeline" : "Input SQL Query"}
                                 </label>
-                                <SqlEditor value={sqlQuery} onChange={(val) => setSqlQuery(val || "")} language={isMongo ? "javascript" : "sql"} height="300px" />
+                                <textarea
+                                    className="w-full h-[300px] bg-black/60 border border-white/10 rounded-xl p-4 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 font-mono text-sm text-gray-200 placeholder:text-gray-600 shadow-inner transition-all duration-200 leading-relaxed"
+                                    placeholder={isMongo ? "db.collection.aggregate([\n  { $match: { ... } },\n  { $group: { ... } }\n])" : "SELECT * FROM users WHERE ..."}
+                                    value={sqlQuery}
+                                    onChange={(e) => setSqlQuery(e.target.value)}
+                                    spellCheck={false}
+                                />
                             </div>
 
                             {/* Analyze Button */}
@@ -273,7 +278,13 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                             {isMongo ? "JSON / BSON" : "SQL DDL"}
                                         </span>
                                     </label>
-                                    <SqlEditor value={schemaInput} onChange={(val) => setSchemaInput(val || "")} language={isMongo ? "json" : "sql"} height="300px" />
+                                    <textarea
+                                        className="flex-1 bg-black/60 border border-white/10 rounded-xl p-4 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 font-mono text-sm text-gray-200 placeholder:text-gray-600 shadow-inner transition-all duration-200 min-h-[260px] leading-relaxed"
+                                        placeholder={isMongo ? '{\n  "_id": "ObjectId",\n  "name": "String",\n  "email": "String"\n}' : "CREATE TABLE users (\n  id INT PRIMARY KEY,\n  name TEXT\n);"}
+                                        value={schemaInput}
+                                        onChange={(e) => setSchemaInput(e.target.value)}
+                                        spellCheck={false}
+                                    />
                                 </motion.div>
 
                                 {/* Right: Question */}

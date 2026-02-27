@@ -230,9 +230,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                     <Database className="h-4 w-4" />
                                     {isMongo ? "MongoDB Query / Pipeline" : "Input SQL Query"}
                                 </label>
-                                <div className="flex-1 relative rounded-xl overflow-hidden border border-white/10 bg-black/60 min-h-[260px]">
-                                    <SqlEditor value={sqlQuery} onChange={(val) => setSqlQuery(val || "")} language={isMongo ? "javascript" : "sql"} />
-                                </div>
+                                <SqlEditor value={sqlQuery} onChange={(val) => setSqlQuery(val || "")} language={isMongo ? "javascript" : "sql"} height="300px" />
                             </div>
 
                             {/* Analyze Button */}
@@ -275,9 +273,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                             {isMongo ? "JSON / BSON" : "SQL DDL"}
                                         </span>
                                     </label>
-                                    <div className="flex-1 relative rounded-xl overflow-hidden border border-white/10 bg-black/60 min-h-[260px]">
-                                        <SqlEditor value={schemaInput} onChange={(val) => setSchemaInput(val || "")} language={isMongo ? "json" : "sql"} />
-                                    </div>
+                                    <SqlEditor value={schemaInput} onChange={(val) => setSchemaInput(val || "")} language={isMongo ? "json" : "sql"} height="300px" />
                                 </motion.div>
 
                                 {/* Right: Question */}
@@ -335,13 +331,8 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                         )}
 
                         {!loading && hasResult && (
-                            <motion.div
-                                key="results"
+                            <div
                                 ref={outputRef}
-                                initial={{ opacity: 0, y: 40, scale: 0.97 }}
-                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{ opacity: 0, y: 20, scale: 0.97 }}
-                                transition={{ type: "spring", stiffness: 240, damping: 22 }}
                                 className="bg-[#0a0a0f]/70 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl ring-1 ring-white/5 overflow-hidden"
                             >
                                 {/* Output panel header */}
@@ -364,7 +355,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                     {mode === "optimizer" && analysisResult && <AnalysisResults result={analysisResult} />}
                                     {mode === "generator" && generatorResult && <GeneratorResults result={generatorResult} isMongo={isMongo} />}
                                 </div>
-                            </motion.div>
+                            </div>
                         )}
 
                         {!loading && !hasResult && (

@@ -1,6 +1,6 @@
 import { motion } from "framer-motion"
 import { Sparkles, Copy, Check, Code2, GitBranch } from "lucide-react"
-import React, { useState } from "react"
+import React, { useState, useMemo } from "react"
 
 type GeneratorResponse = {
     query: string
@@ -87,10 +87,13 @@ function normalizeCode(raw: string): string {
     return code
 }
 
-function CodeBlock({ code }: { code: string }) {
-    const lines = normalizeCode(code).split("\n")
+const CodeBlock = React.memo(function CodeBlock({ code }: { code: string }) {
+    // Memoize all line processing — never re-run regex on every parent render
+    const lines = useMemo(() => normalizeCode(code).split("\n"), [code])
+    const highlighted = useMemo(() => lines.map((line) => highlight(line)), [lines])
+
     return (
-        <div className="flex font-mono text-[12.5px] leading-6 overflow-x-auto overflow-y-auto max-h-[580px] custom-scrollbar select-text">
+        <div className="flex font-mono text-[12.5px] leading-6 overflow-x-auto overflow-y-auto max-h-[580px] select-text">
             {/* Line numbers gutter */}
             <div
                 className="select-none flex flex-col items-end pr-4 pl-4 text-gray-600 border-r border-white/10 bg-black/30 sticky left-0 shrink-0"
@@ -103,15 +106,15 @@ function CodeBlock({ code }: { code: string }) {
 
             {/* Code content */}
             <div className="flex-1 pl-5 pr-6 py-0 min-w-max">
-                {lines.map((line, i) => (
-                    <div key={i} className="leading-6 hover:bg-white/[0.03] whitespace-pre">
-                        {highlight(line)}
+                {highlighted.map((h, i) => (
+                    <div key={i} className="leading-6 whitespace-pre">
+                        {h}
                     </div>
                 ))}
             </div>
         </div>
     )
-}
+})
 
 // ── Main component ────────────────────────────────────────────────────────────
 export function GeneratorResults({
@@ -139,7 +142,7 @@ export function GeneratorResults({
                 initial={{ opacity: 0, y: 16, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ type: "spring", stiffness: 280, damping: 22 }}
-                className="rounded-xl border border-indigo-500/25 bg-[#0d0d14] shadow-[0_0_50px_-12px_rgba(79,70,229,0.25)] overflow-hidden"
+                className="rounded-xl border border-indigo-500/25 bg-[#0d0d14] overflow-hidden"
             >
                 {/* Editor header bar */}
                 <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 bg-[#111118]">

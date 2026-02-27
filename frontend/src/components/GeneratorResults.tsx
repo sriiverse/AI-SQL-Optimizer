@@ -69,8 +69,26 @@ function highlight(line: string): React.ReactElement {
 }
 
 // ── Code viewer with line numbers ────────────────────────────────────────────
+function normalizeCode(raw: string): string {
+    // Normalize Windows line endings
+    let code = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    // If the model returned a single-line blob with no newlines,
+    // attempt a basic pretty-print by inserting newlines at key positions
+    if (!code.includes("\n") && code.length > 80) {
+        code = code
+            .replace(/\{/g, "{\n  ")
+            .replace(/\}/g, "\n}")
+            .replace(/\[/g, "[\n  ")
+            .replace(/\],/g, "\n],")
+            .replace(/\],\s*\{/g, "],\n{")
+            .replace(/,\s*\$/g, ",\n  $")
+            .replace(/\n  \n/g, "\n")
+    }
+    return code
+}
+
 function CodeBlock({ code }: { code: string }) {
-    const lines = code.split("\n")
+    const lines = normalizeCode(code).split("\n")
     return (
         <div className="flex font-mono text-[12.5px] leading-6 overflow-x-auto overflow-y-auto max-h-[580px] custom-scrollbar select-text">
             {/* Line numbers gutter */}

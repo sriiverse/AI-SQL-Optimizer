@@ -5,9 +5,10 @@ interface SqlEditorProps {
     value: string
     onChange: (value: string | undefined) => void
     readOnly?: boolean
+    language?: string   // "sql" | "javascript" | "json" — drives syntax highlighting
 }
 
-export function SqlEditor({ value, onChange, readOnly = false }: SqlEditorProps) {
+export function SqlEditor({ value, onChange, readOnly = false, language = "sql" }: SqlEditorProps) {
     const monaco = useMonaco()
 
     useEffect(() => {
@@ -19,6 +20,7 @@ export function SqlEditor({ value, onChange, readOnly = false }: SqlEditorProps)
                 colors: {
                     "editor.background": "#09090b", // zinc-950
                     "editor.lineHighlightBackground": "#18181b",
+                    "editor.foreground": "#e4e4e7",   // ensure text always visible
                 },
             })
             monaco.editor.setTheme("custom-dark")
@@ -29,7 +31,7 @@ export function SqlEditor({ value, onChange, readOnly = false }: SqlEditorProps)
         <div className="h-full w-full border border-white/10 rounded-lg overflow-hidden bg-black/50">
             <Editor
                 height="100%"
-                defaultLanguage="sql"
+                language={language}
                 value={value}
                 onChange={onChange}
                 options={{
@@ -39,6 +41,8 @@ export function SqlEditor({ value, onChange, readOnly = false }: SqlEditorProps)
                     readOnly: readOnly,
                     fontFamily: "Geist Mono, JetBrains Mono, monospace",
                     padding: { top: 16 },
+                    wordWrap: "off",
+                    automaticLayout: true,
                 }}
                 theme="custom-dark"
             />

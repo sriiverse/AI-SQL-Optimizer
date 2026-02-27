@@ -231,7 +231,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                     {isMongo ? "MongoDB Query / Pipeline" : "Input SQL Query"}
                                 </label>
                                 <div className="flex-1 relative rounded-xl overflow-hidden border border-white/10 bg-black/60 min-h-[260px]">
-                                    <SqlEditor value={sqlQuery} onChange={(val) => setSqlQuery(val || "")} />
+                                    <SqlEditor value={sqlQuery} onChange={(val) => setSqlQuery(val || "")} language={isMongo ? "javascript" : "sql"} />
                                 </div>
                             </div>
 
@@ -276,7 +276,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                         </span>
                                     </label>
                                     <div className="flex-1 relative rounded-xl overflow-hidden border border-white/10 bg-black/60 min-h-[260px]">
-                                        <SqlEditor value={schemaInput} onChange={(val) => setSchemaInput(val || "")} />
+                                        <SqlEditor value={schemaInput} onChange={(val) => setSchemaInput(val || "")} language={isMongo ? "json" : "sql"} />
                                     </div>
                                 </motion.div>
 

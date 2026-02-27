@@ -1,6 +1,6 @@
 import { motion } from "framer-motion"
 import { Sparkles, Copy, Check, Code2, GitBranch } from "lucide-react"
-import { useState } from "react"
+import React, { useState } from "react"
 
 type GeneratorResponse = {
     query: string
@@ -8,7 +8,7 @@ type GeneratorResponse = {
 }
 
 // ── Lightweight syntax highlighter ──────────────────────────────────────────
-function highlight(line: string): JSX.Element {
+function highlight(line: string): React.ReactElement {
     // Token patterns in priority order
     const tokens: { regex: RegExp; className: string }[] = [
         // Comments
@@ -33,7 +33,7 @@ function highlight(line: string): JSX.Element {
     ]
 
     // Split by first matching token, recursively colour
-    const parts: JSX.Element[] = []
+    const parts: React.ReactElement[] = []
     let rest = line
     let idx = 0
 
@@ -111,7 +111,6 @@ export function GeneratorResults({
         setTimeout(() => setCopied(false), 2000)
     }
 
-    const titleLabel = isMongo ? "Generated Pipeline" : "Generated SQL"
     const TitleIcon = isMongo ? GitBranch : Code2
 
     return (
@@ -148,8 +147,8 @@ export function GeneratorResults({
                         whileTap={{ scale: 0.93 }}
                         transition={{ type: "spring", stiffness: 400, damping: 20 }}
                         className={`flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded-md border transition-all duration-200 ${copied
-                                ? "bg-green-500/15 border-green-500/30 text-green-400"
-                                : "bg-white/5 border-white/12 text-gray-400 hover:border-indigo-500/40 hover:text-indigo-300"
+                            ? "bg-green-500/15 border-green-500/30 text-green-400"
+                            : "bg-white/5 border-white/12 text-gray-400 hover:border-indigo-500/40 hover:text-indigo-300"
                             }`}
                     >
                         {copied

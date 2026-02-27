@@ -32,7 +32,17 @@ const GENERATOR_STEPS = [
 const DIALECTS = [
     { id: "postgresql", name: "PostgreSQL", icon: "🐘" },
     { id: "mysql", name: "MySQL", icon: "🐬" },
-    { id: "sqlite", name: "SQLite", icon: "📦" }
+    { id: "sqlite", name: "SQLite", icon: "📦" },
+    { id: "mongodb", name: "MongoDB", icon: "🍃" },
+]
+
+const MONGODB_STEPS = [
+    { icon: "🍃", text: "Parsing your collection schema..." },
+    { icon: "🔗", text: "Analyzing document relationships and references..." },
+    { icon: "📊", text: "Evaluating aggregation pipeline stages..." },
+    { icon: "⚡", text: "Checking index coverage for query fields..." },
+    { icon: "🛠️", text: "Optimizing pipeline for performance..." },
+    { icon: "✨", text: "Please have patience — we're making sure your wait is worth it." },
 ]
 
 // Spring physics preset for bouncy panel entrances
@@ -65,6 +75,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
 
     // Joint State
     const [dialect, setDialect] = useState("postgresql")
+    const isMongo = dialect === "mongodb"
 
     // Optimizer State
     const [sqlQuery, setSqlQuery] = useState<any>("SELECT * FROM users WHERE active = true")
@@ -149,7 +160,9 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                         </Button>
                         <div className="flex flex-col">
                             <h1 className="font-bold text-lg tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
-                                {mode === "optimizer" ? "Query Optimizer" : "Text-to-SQL Generator"}
+                                {mode === "optimizer"
+                                    ? (isMongo ? "Pipeline Review" : "Query Optimizer")
+                                    : (isMongo ? "Text-to-MongoDB" : "Text-to-SQL Generator")}
                             </h1>
                             <span className="text-[10px] text-gray-500 font-mono tracking-wider uppercase">AI Powered Engine</span>
                         </div>
@@ -215,7 +228,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                             <div className="flex flex-col gap-2 bg-white/[0.04] backdrop-blur-sm border border-white/10 rounded-2xl p-5 shadow-2xl ring-1 ring-white/5 min-h-[320px]">
                                 <label className="text-sm font-semibold text-blue-300/90 flex items-center gap-2 mb-1">
                                     <Database className="h-4 w-4" />
-                                    Input SQL Query
+                                    {isMongo ? "MongoDB Query / Pipeline" : "Input SQL Query"}
                                 </label>
                                 <div className="flex-1 relative rounded-xl overflow-hidden border border-white/10 bg-black/60 min-h-[260px]">
                                     <SqlEditor value={sqlQuery} onChange={(val) => setSqlQuery(val || "")} />
@@ -257,8 +270,10 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                 >
                                     <label className="text-sm font-semibold text-blue-300/90 flex items-center gap-2 mb-1">
                                         <Database className="h-4 w-4" />
-                                        Schema Context
-                                        <span className="ml-auto text-[10px] text-gray-500 font-mono font-normal uppercase tracking-wider">SQL DDL</span>
+                                        {isMongo ? "Collection Schema / Sample Docs" : "Schema Context"}
+                                        <span className="ml-auto text-[10px] text-gray-500 font-mono font-normal uppercase tracking-wider">
+                                            {isMongo ? "JSON / BSON" : "SQL DDL"}
+                                        </span>
                                     </label>
                                     <div className="flex-1 relative rounded-xl overflow-hidden border border-white/10 bg-black/60 min-h-[260px]">
                                         <SqlEditor value={schemaInput} onChange={(val) => setSchemaInput(val || "")} />
@@ -316,7 +331,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
 
                     <AnimatePresence mode="wait">
                         {loading && (
-                            <LoadingPanel mode={mode} />
+                            <LoadingPanel mode={mode} isMongo={isMongo} />
                         )}
 
                         {!loading && hasResult && (
@@ -394,8 +409,10 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
 }
 
 // ─── Rotating Loading Panel ─────────────────────────────────────────────────
-function LoadingPanel({ mode }: { mode: "optimizer" | "generator" }) {
-    const steps = mode === "optimizer" ? OPTIMIZER_STEPS : GENERATOR_STEPS
+function LoadingPanel({ mode, isMongo }: { mode: "optimizer" | "generator"; isMongo: boolean }) {
+    const steps = isMongo
+        ? MONGODB_STEPS
+        : mode === "optimizer" ? OPTIMIZER_STEPS : GENERATOR_STEPS
     const [stepIdx, setStepIdx] = useState(0)
 
     useEffect(() => {

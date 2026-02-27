@@ -9,7 +9,36 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
     Uses a pre-initialized Google Gemini model to analyze the SQL query.
     Runs asynchronously to avoid blocking the FastAPI event loop.
     """
-    prompt = f"""
+    if dialect == "mongodb":
+        prompt = f"""
+    You are an expert MongoDB Database Engineer. Analyze the following MongoDB query or aggregation pipeline for performance issues.
+
+    Query / Pipeline: {query}
+
+    Provide your analysis in the following JSON format ONLY:
+    {{
+        "execution_plan_summary": {{
+            "node_type": "Primary operation (e.g., COLLSCAN, IXSCAN, $lookup, $group)",
+            "cost": 123.45,
+            "rows": 100,
+            "relation_name": "Collection name involved"
+        }},
+        "suggestions": [
+            {{
+                "title": "Short title of the problem",
+                "description": "Detailed explanation of why this pipeline stage or query is inefficient",
+                "impact": "High/Medium/Low",
+                "sql_snippet": "Optimized MongoDB query or pipeline stage snippet"
+            }}
+        ],
+        "optimized_query": "The fully rewritten optimized MongoDB query or aggregation pipeline",
+        "explanation": "A concise summary of why the pipeline was inefficient and how the changes improve it (e.g., COLLSCAN → IXSCAN, reducing $lookup depth, adding index hints)."
+    }}
+
+    Do not include markdown backticks around the JSON. Just return the raw JSON string.
+    """
+    else:
+        prompt = f"""
     You are an expert {dialect} Database Administrator. Analyze the following SQL query for performance issues.
     
     Query: {query}

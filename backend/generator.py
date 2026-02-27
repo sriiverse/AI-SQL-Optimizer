@@ -7,7 +7,27 @@ async def generate_sql_with_gemini(schema: str, question: str, dialect: str, mod
     Uses a pre-initialized Google Gemini model to generate SQL from natural language + schema.
     Runs asynchronously to avoid blocking the FastAPI event loop.
     """
-    prompt = f"""
+    if dialect == "mongodb":
+        prompt = f"""
+    You are an expert MongoDB Engineer.
+
+    Context (Collection Schema / Sample Documents):
+    {schema}
+
+    Question: {question}
+
+    Task: Generate a valid MongoDB aggregation pipeline or query (using db.collection.find() / db.collection.aggregate()) to answer the question based on the collection schema.
+    Use proper MongoDB operator syntax ($match, $group, $lookup, $project, $sort, $limit, etc.).
+    Also provide a brief explanation of how the pipeline works.
+
+    Output format:
+    SQL: <the MongoDB query or aggregation pipeline>
+    Explanation: <the explanation>
+
+    Separate the query and explanation clearly. Do not wrap in markdown backticks.
+    """
+    else:
+        prompt = f"""
     You are an expert SQL Generator.
     
     Context (Database Schema):
@@ -54,7 +74,7 @@ async def generate_sql_with_gemini(schema: str, question: str, dialect: str, mod
                 
         # Fallback if parsing fails
         if not sql_part:
-            if "select" in text.lower():
+            if "select" in text.lower() or "db." in text.lower() or "aggregate" in text.lower():
                 sql_part = text
                 exp_part = "Generated based on your question."
             else:

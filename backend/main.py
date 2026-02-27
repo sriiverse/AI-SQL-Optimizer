@@ -2,8 +2,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from models import AnalyzeRequest, AnalysisResult, TextToSqlRequest, TextToSqlResponse
-from analyze import analyze_query_demo, analyze_query_with_gemini
-from generator import generate_sql_demo, generate_sql_with_gemini
+from analyze import analyze_query_demo, analyze_query_with_gemini, analyze_pipeline_demo
+from generator import generate_sql_demo, generate_sql_with_gemini, generate_mongodb_demo
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -61,6 +61,9 @@ async def analyze_query_endpoint(request: AnalyzeRequest):
         if model:
             return await analyze_query_with_gemini(request.query, request.dialect, model)
         else:
+            # Demo/fallback mode: route to MongoDB or SQL analyser
+            if request.dialect == "mongodb":
+                return analyze_pipeline_demo(request.query)
             return analyze_query_demo(request.query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -72,6 +75,9 @@ async def generate_sql_endpoint(request: TextToSqlRequest):
         if model:
             return await generate_sql_with_gemini(request.schema_def, request.question, request.dialect, model)
         else:
+            # Demo/fallback mode: route to MongoDB or SQL generator
+            if request.dialect == "mongodb":
+                return generate_mongodb_demo(request.schema_def, request.question)
             return generate_sql_demo(request.schema_def, request.question)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

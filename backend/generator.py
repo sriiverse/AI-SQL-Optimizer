@@ -138,3 +138,140 @@ ORDER BY avg_latency ASC;"""
         query=generated_sql.strip(),
         explanation=explanation
     )
+
+
+def generate_mongodb_demo(schema: str, question: str) -> TextToSqlResponse:
+    """
+    Simulates MongoDB aggregation pipeline generation for demo/fallback mode.
+    Pattern-matches intent keywords in the question and returns a realistic pipeline.
+    """
+    q = question.lower()
+
+    # --- Time-series / recent activity ---
+    if any(k in q for k in ["last", "recent", "today", "week", "month", "days"]):
+        pipeline = '''db.orders.aggregate([
+  // Step 1: Filter to recent documents first (enables index usage)
+  { $match: {
+      placed_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      status: "delivered"
+  }},
+  // Step 2: Unwind line items
+  { $unwind: "$items" },
+  // Step 3: Group by product
+  { $group: {
+      _id: "$items.product_id",
+      total_revenue: { $sum: { $multiply: ["$items.unit_price", "$items.qty"] } },
+      order_count:   { $sum: 1 }
+  }},
+  // Step 4: Sort by revenue descending
+  { $sort: { total_revenue: -1 } },
+  { $limit: 10 },
+  // Step 5: Enrich with product details
+  { $lookup: {
+      from: "products",
+      localField: "_id",
+      foreignField: "_id",
+      as: "product"
+  }},
+  { $unwind: "$product" },
+  { $project: {
+      name: "$product.name",
+      category: "$product.category_path",
+      total_revenue: 1,
+      order_count: 1
+  }}
+])'''
+        explanation = "Filtered orders to the last 30 days using an indexed $match, unwound line items, grouped by product to sum revenue, then enriched results with product details via $lookup. $match is placed first to leverage the placed_at index and avoid a COLLSCAN."
+
+    # --- Join / lookup between collections ---
+    elif any(k in q for k in ["join", "from", "with", "related", "lookup", "belongs"]):
+        pipeline = '''db.users.aggregate([
+  // Step 1: Filter qualifying users
+  { $match: { "profile.tier": { $in: ["premium", "vip"] }, last_active: { $gte: new Date(Date.now() - 7*24*60*60*1000) } } },
+  // Step 2: Join their orders
+  { $lookup: {
+      from: "orders",
+      let: { uid: "$_id" },
+      pipeline: [
+        { $match: { $expr: { $eq: ["$user_id", "$$uid"] }, status: "delivered" } },
+        { $sort: { placed_at: -1 } },
+        { $limit: 5 }
+      ],
+      as: "recent_orders"
+  }},
+  // Step 3: Only users with at least one order
+  { $match: { "recent_orders.0": { $exists: true } } },
+  { $project: {
+      username: 1,
+      tier: "$profile.tier",
+      country: "$profile.country",
+      recent_orders: 1
+  }}
+])'''
+        explanation = "Used a $lookup with a correlated sub-pipeline (let/pipeline syntax) to fetch only delivered orders per user, avoiding a full orders collection scan. Pre-filtered users with $match before the $lookup to minimize the number of join evaluations."
+
+    # --- Grouping / aggregation / count / sum / average ---
+    elif any(k in q for k in ["group", "count", "sum", "average", "avg", "total", "aggregate"]):
+        pipeline = '''db.reviews.aggregate([
+  // Filter to verified reviews with meaningful sentiment
+  { $match: { verified_purchase: true, posted_at: { $gte: new Date(Date.now() - 90*24*60*60*1000) } } },
+  // Group per product
+  { $group: {
+      _id: "$product_id",
+      avg_rating:        { $avg: "$rating" },
+      avg_sentiment:     { $avg: "$sentiment_score" },
+      review_count:      { $sum: 1 },
+      helpful_votes:     { $sum: "$helpful_votes" }
+  }},
+  // Only products with enough reviews to be statistically significant
+  { $match: { review_count: { $gte: 5 } } },
+  { $sort: { avg_sentiment: -1 } },
+  { $limit: 20 },
+  { $lookup: {
+      from: "products",
+      localField: "_id",
+      foreignField: "_id",
+      as: "product"
+  }},
+  { $unwind: "$product" },
+  { $project: { "product.name": 1, avg_rating: 1, avg_sentiment: 1, review_count: 1 } }
+])'''
+        explanation = "Filtered to verified recent reviews, grouped by product to compute average rating and AI sentiment score, then eliminated products with fewer than 5 reviews to avoid statistical noise. Enriched with product names via a final $lookup."
+
+    # --- Top N / ranking / leaderboard ---
+    elif any(k in q for k in ["top", "best", "highest", "most", "rank", "leaderboard"]):
+        pipeline = '''db.events.aggregate([
+  { $match: {
+      event_type: { $in: ["purchase", "add_to_cart"] },
+      occurred_at: { $gte: new Date(Date.now() - 7*24*60*60*1000) }
+  }},
+  { $group: {
+      _id: "$product_id",
+      interaction_count: { $sum: 1 },
+      unique_users: { $addToSet: "$user_id" }
+  }},
+  { $addFields: { unique_user_count: { $size: "$unique_users" } } },
+  { $sort: { interaction_count: -1 } },
+  { $limit: 10 },
+  { $lookup: { from: "products", localField: "_id", foreignField: "_id", as: "product" } },
+  { $unwind: "$product" },
+  { $project: {
+      "product.name": 1, "product.price": 1,
+      interaction_count: 1, unique_user_count: 1
+  }}
+])'''
+        explanation = "Matched purchase and cart events from the last 7 days, grouped by product to count interactions and unique users ($addToSet for deduplication), sorted by interaction count, and enriched with product metadata."
+
+    # --- Default: general find with filter ---
+    else:
+        pipeline = '''db.users.aggregate([
+  { $match: { "profile.tier": "premium", last_active: { $gte: new Date(Date.now() - 30*24*60*60*1000) } } },
+  { $project: { username: 1, email: 1, tier: "$profile.tier", country: "$profile.country", _id: 0 } },
+  { $limit: 100 }
+])'''
+        explanation = "Filtered the users collection using an indexed $match on tier and last_active, then projected only the required fields to minimize network payload. $limit prevents unbounded result sets."
+
+    return TextToSqlResponse(
+        query=pipeline.strip(),
+        explanation=explanation
+    )

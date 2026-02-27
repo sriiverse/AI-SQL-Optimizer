@@ -171,3 +171,107 @@ def analyze_query_demo(query: str) -> AnalysisResult:
         optimized_query=query.replace("*", "id, name, email") if "select *" in query_lower else query,
         explanation="The query uses a Sequential Scan which is slow on large datasets. Optimization suggests targeting specific columns and adding indexes."
     )
+
+
+def analyze_pipeline_demo(query: str) -> AnalysisResult:
+    """
+    Simulates MongoDB aggregation pipeline analysis for demo/fallback mode.
+    Pattern-matches common MongoDB antipatterns and returns realistic suggestions.
+    """
+    q = query.lower()
+    suggestions = []
+
+    # Detect COLLSCAN risk: $group or $sort before any $match
+    has_match   = "$match" in q
+    has_group   = "$group" in q
+    has_sort    = "$sort" in q
+    has_lookup  = "$lookup" in q
+    has_unwind  = "$unwind" in q
+    has_limit   = "$limit" in q
+    has_project = "$project" in q
+    has_index   = "hint" in q or "$indexstats" in q
+
+    # Determine primary scan type
+    if not has_match:
+        node_type = "COLLSCAN"
+        cost = 8500.0
+        rows = 100000
+    elif has_lookup:
+        node_type = "$lookup + IXSCAN"
+        cost = 420.0
+        rows = 1500
+    else:
+        node_type = "IXSCAN"
+        cost = 45.0
+        rows = 80
+
+    # Guess collection name
+    import re
+    coll_match = re.search(r'db\.([\w]+)\.', query)
+    collection = coll_match.group(1) if coll_match else "unknown_collection"
+
+    root_node = PlanNode(
+        node_type=node_type,
+        cost=cost,
+        rows=rows,
+        relation_name=collection
+    )
+
+    if not has_match:
+        suggestions.append(Suggestion(
+            title="Missing $match Stage (Full Collection Scan)",
+            description="Your pipeline has no $match stage before $group or $sort. MongoDB will perform a full COLLSCAN on every document in the collection before aggregating, which is extremely expensive on large collections.",
+            impact="High",
+            sql_snippet='{ $match: { status: "active", created_at: { $gte: new Date(Date.now() - 30*24*60*60*1000) } } }'
+        ))
+
+    if has_lookup and not has_match:
+        suggestions.append(Suggestion(
+            title="Unbounded $lookup Join",
+            description="A $lookup stage without a preceding $match will join every document in the source collection to the foreign collection. Add a $match before $lookup to reduce the input document count and avoid a cross-collection nested loop scan.",
+            impact="High",
+            sql_snippet='// Add before $lookup:\n{ $match: { user_id: { $in: targetUserIds } } }'
+        ))
+
+    if has_unwind and not has_limit:
+        suggestions.append(Suggestion(
+            title="$unwind Without $limit (Document Explosion)",
+            description="$unwind on a large array field multiplies your document count by the array length. Without a $limit downstream, this can produce millions of intermediate documents. Add $limit or pre-filter with $match on the array.",
+            impact="High",
+            sql_snippet='{ $unwind: { path: "$items", includeArrayIndex: "idx" } },\n{ $limit: 10000 }'
+        ))
+
+    if has_group and not has_project:
+        suggestions.append(Suggestion(
+            title="Missing $project After $group",
+            description="After $group, all non-grouped fields are dropped. Explicitly $project only the fields you need to avoid passing large intermediate documents to subsequent stages.",
+            impact="Medium",
+            sql_snippet='{ $project: { _id: 1, total: 1, count: 1 } }'
+        ))
+
+    if has_sort and not has_index:
+        suggestions.append(Suggestion(
+            title="$sort Without Index Hint",
+            description="A $sort stage without a supporting index will perform an in-memory sort. For large result sets this can exceed MongoDB's 100MB memory limit. Add a compound index on your sort fields or use allowDiskUse.",
+            impact="Medium",
+            sql_snippet='db.collection.createIndex({ created_at: -1, user_id: 1 })\n// or use: .aggregate([...], { allowDiskUse: true })'
+        ))
+
+    if not suggestions:
+        suggestions.append(Suggestion(
+            title="Pipeline looks well-structured",
+            description="The pipeline uses $match early to filter documents and indexes appear to be in use. Consider adding .explain('executionStats') in your MongoDB shell to verify IXSCAN usage.",
+            impact="Low"
+        ))
+
+    optimized = query
+    if not has_match:
+        optimized = 'db.' + collection + '''.aggregate([\n  { $match: { /* add your filter here */ } },\n''' + query.split('.aggregate([', 1)[-1] if '.aggregate(' in query else query
+
+    return AnalysisResult(
+        original_query=query,
+        execution_plan=root_node,
+        suggestions=suggestions,
+        optimized_query=optimized,
+        explanation=f"The pipeline starts with a {node_type} on '{collection}'. {'Moving $match before $group and $lookup stages will dramatically reduce intermediate document counts and enable index usage.' if not has_match else 'Consider adding index hints and projecting only required fields after $group stages.'}"
+    )

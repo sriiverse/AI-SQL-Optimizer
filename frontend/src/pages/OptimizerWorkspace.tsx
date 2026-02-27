@@ -318,7 +318,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                             <span>Generating Logic...</span>
                                         </div>
                                     ) : (
-                                        <><Wand2 className="mr-2 h-5 w-5" /> Generate SQL Query</>
+                                        <><Wand2 className="mr-2 h-5 w-5" /> {isMongo ? "Generate Pipeline" : "Generate SQL Query"}</>
                                     )}
                                 </Button>
                             </motion.div>
@@ -362,7 +362,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                 {/* Scrollable results */}
                                 <div className="p-6 custom-scrollbar">
                                     {mode === "optimizer" && analysisResult && <AnalysisResults result={analysisResult} />}
-                                    {mode === "generator" && generatorResult && <GeneratorResults result={generatorResult} />}
+                                    {mode === "generator" && generatorResult && <GeneratorResults result={generatorResult} isMongo={isMongo} />}
                                 </div>
                             </motion.div>
                         )}

@@ -6,3 +6,4 @@ google-generativeai>=0.8.0
 pytest
 httpx
 tabulate
+groq>=0.4.0

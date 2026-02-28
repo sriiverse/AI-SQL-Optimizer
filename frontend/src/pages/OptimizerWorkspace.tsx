@@ -161,7 +161,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                             <h1 className="font-bold text-lg tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
                                 {mode === "optimizer"
                                     ? (isMongo ? "Pipeline Review" : "Query Optimizer")
-                                    : (isMongo ? "Text-to-MongoDB" : "Text-to-SQL Generator")}
+                                    : "Text-to-Query"}
                             </h1>
                             <span className="text-[10px] text-gray-500 font-mono tracking-wider uppercase">AI Powered Engine</span>
                         </div>

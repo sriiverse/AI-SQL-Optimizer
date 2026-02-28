@@ -80,7 +80,7 @@ export default function LandingPage() {
                     className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tight text-center mb-6 leading-tight"
                 >
                     <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-300 via-indigo-300 to-purple-300 drop-shadow-[0_0_25px_rgba(99,102,241,0.3)]">
-                        Optimize SQL Queries
+                        Optimize Database Queries
                     </span>
                     <br />
                     <span className="text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">
@@ -168,7 +168,7 @@ export default function LandingPage() {
                             onClick={() => navigate("/generator")}
                         >
                             <div className="flex items-center gap-2 text-gray-200 font-medium text-lg tracking-wide">
-                                <Code2 className="w-5 h-5 opacity-70" /> Text-to-SQL
+                                <Code2 className="w-5 h-5 opacity-70" /> Text-to-Query
                             </div>
                         </Button>
                     </motion.div>

@@ -58,6 +58,21 @@ Question: {question}
 ### Time-Window Metrics
 15. When computing time-series metrics for a specific window (last 8 weeks, last 30 days, etc.), you MUST add a `$match` stage at the START of the relevant pipeline or sub-pipeline to restrict documents to only that time window BEFORE any `$group` or `$setWindowFields`. Never group across all time and assume the window is implied.
 
+### $filter — Always Define `as`, Never Use `$$this`
+16. Inside EVERY `$filter` expression, you MUST define the `as` parameter with an explicit variable name. NEVER use `$$this` as your element variable — it is not a valid iterator variable in `$filter`. Always write: `$filter: {{ input: ..., as: "elem", cond: {{ ... "$$elem.field" ... }} }}`. Using `$$this` without `as` will throw a runtime error.
+
+### Percentile vs Rank — Use Correct Operator
+17. `$rank` returns an ordinal position (1, 2, 3...), NOT a percentage. It CANNOT be used to determine "top 10%". To compute a percentile-based flag:
+    - Use `$percent_rank` (MongoDB 5.0+) inside `$setWindowFields`: value will be 0.0 to 1.0.
+    - Then flag with: `$lte: ["$percent_rank_value", 0.1]` for bottom 10% or `$gte` for top 10%.
+    NEVER use `$rank` where a percentile is required.
+
+### Symmetric Operations — Always Implement Both Sides
+18. When the question references both directions of an operation (buy AND sell, inbound AND outbound, sent AND received), you MUST implement BOTH sides with separate `$lookup` or `$filter` stages. Never implement only one direction and omit the other. Both totals must appear in the final output.
+
+### Cross-Collection Duration Calculations
+19. When the question asks for average duration, elapsed time, or time-between-events that spans multiple documents or collections (e.g. average match duration from brackets.match_id → matches.started_at/ended_at), you MUST add a `$lookup` to join the related collection by ID and compute the duration as `$subtract: [ended_at, started_at]` on the joined documents. Never omit this join and leave duration uncomputed.
+
 ### Requirement Checklist Before Output
 Before writing the pipeline, mentally verify:
 - [ ] All required collections are looked up
@@ -69,6 +84,10 @@ Before writing the pipeline, mentally verify:
 - [ ] Computed fields on ancestors/related docs are re-computed inside their own sub-pipeline
 - [ ] Time-series stages begin with a time-restricting $match
 - [ ] Operator/actor-event correlations have an explicit $lookup to the events collection
+- [ ] Every `$filter` has an explicit `as` parameter — no `$$this` used anywhere
+- [ ] Percentile flags use `$percent_rank`, NOT `$rank`
+- [ ] Both sides of symmetric operations (buy+sell, in+out) are implemented
+- [ ] Duration calculations across collections use a $lookup to get timestamps
 
 ## Output Format (plain text, no markdown backticks):
 QUERY: <the complete MongoDB aggregation pipeline starting with db.collection.aggregate([...])>
@@ -156,9 +175,16 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
         query_part = re.sub(r'```(?:js|javascript|sql|mongodb)?', '', query_part)
         query_part = query_part.replace('```', '').strip()
 
+        # Run syntax validator for MongoDB queries
+        warnings = validate_mongodb_query(query_part) if dialect == "mongodb" else []
+        explanation = exp_part.strip() or "Query generated successfully."
+        if warnings:
+            warning_block = "\n\n⚠️ AUTO-DETECTED ISSUES:\n" + "\n".join(f"  • {w}" for w in warnings)
+            explanation += warning_block
+
         return TextToSqlResponse(
             query=query_part,
-            explanation=exp_part.strip() or "Query generated successfully."
+            explanation=explanation
         )
 
     except Exception as e:
@@ -167,6 +193,69 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
             query="ERROR",
             explanation=f"AI Generation Failed: {str(e)}"
         )
+
+
+def validate_mongodb_query(query: str) -> list[str]:
+    """
+    Post-generation static validator for MongoDB aggregation pipelines.
+    Detects common runtime-breaking syntax errors before returning to the user.
+    Returns a list of human-readable warning strings.
+    """
+    warnings = []
+
+    # Check 1: $filter missing 'as' parameter ($$this misuse)
+    filter_blocks = re.findall(r'\$filter\s*:\s*\{([^}]{0,300})\}', query, re.DOTALL)
+    for block in filter_blocks:
+        if '"as"' not in block and "'as'" not in block and 'as:' not in block:
+            warnings.append(
+                '$filter is missing the "as" parameter — $$this is not valid in $filter. '
+                'Add as: "elem" and reference $$elem.field in the cond.'
+            )
+            break
+
+    # Check 2: $dateSubtract / $dateAdd used directly as a $match value without $expr
+    date_op_in_match = re.search(
+        r'\$match\s*:\s*\{[^{}]*\$(gte|lte|gt|lt)\s*:\s*\{\s*\$(dateSubtract|dateAdd|subtract)\b',
+        query, re.DOTALL
+    )
+    if date_op_in_match:
+        warnings.append(
+            '$dateSubtract/$dateAdd used directly in $match — wrap with $expr: '
+            '{ $match: { $expr: { $gte: ["$field", { $dateSubtract: {...} }] } } }'
+        )
+
+    # Check 3: $graphLookup inside an expression context
+    graphlookup_in_expr = re.search(
+        r'(\$addFields|\$project|\$map|\$let)\s*:[^;]{0,500}\$graphLookup',
+        query, re.DOTALL
+    )
+    if graphlookup_in_expr:
+        warnings.append(
+            '$graphLookup detected inside an expression context — it is a pipeline STAGE only. '
+            'Move it to top-level or inside a $lookup sub-pipeline.'
+        )
+
+    # Check 4: $rank used where percentile semantics likely intended
+    if re.search(r'["\']?\$rank["\']?\s*:', query) and \
+       re.search(r'(percent|top\s*\d+\s*%|bottom\s*\d+\s*%)', query, re.IGNORECASE):
+        warnings.append(
+            '$rank returns an ordinal position, not a percentile (0–100%). '
+            'Use $percent_rank inside $setWindowFields for true 0.0–1.0 percentile values.'
+        )
+
+    # Check 5: Truncated pipeline — mismatched brackets
+    open_sq   = query.count('[')
+    close_sq  = query.count(']')
+    open_cu   = query.count('{')
+    close_cu  = query.count('}')
+    if abs(open_sq - close_sq) > 2 or abs(open_cu - close_cu) > 4:
+        warnings.append(
+            f'Pipeline may be truncated — brackets mismatched '
+            f'([ {open_sq} vs ] {close_sq}, {{ {open_cu} vs }} {close_cu}). '
+            'Consider splitting into smaller sub-queries.'
+        )
+
+    return warnings
 
 
 def _extract_first_collection(schema: str) -> str:

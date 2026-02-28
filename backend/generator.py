@@ -253,7 +253,7 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
                     import groq
                     client = groq.AsyncGroq(api_key=groq_key)
                     completion = await client.chat.completions.create(
-                        model="llama3-70b-8192",
+                        model="llama-3.3-70b-versatile",
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.2,
                         max_tokens=3000

@@ -167,6 +167,16 @@ Question: {question}
     `$lookup: {{ from: "work_orders", let: {{ inc_ids: "$zone_incidents.incident_id" }}, pipeline: [{{ $match: {{ $expr: {{ $in: ["$incident_id", "$$inc_ids"] }} }} }}], as: "..." }}`
     Always pass every outer field through `let`. This applies even when the outer field is a computed/added field from a previous stage.
 
+### Never Project Uncomputed Fields
+33. In a `$project` stage, NEVER reference a field with `fieldName: 1` unless that field was either present in the original document schema OR explicitly computed in a prior `$addFields` / `$group` / `$lookup` stage. Before writing `$project`, trace every projected field back to where it was created. If it was not created upstream, either add the computation or remove the projection.
+    WRONG: `{{ $project: {{ administrative_path: 1 }} }}` when no prior stage computed `administrative_path`.
+    CORRECT: Add `{{ $addFields: {{ administrative_path: ... }} }}` before the `$project`.
+
+### $setWindowFields Cannot Be an Expression Value
+34. `$setWindowFields` is a pipeline STAGE. It cannot be the value of a field inside `$addFields`, `$project`, or any expression. This will crash at runtime.
+    WRONG: `{{ $addFields: {{ my_field: {{ $setWindowFields: {{ ... }} }} }} }}`
+    CORRECT: Use `$setWindowFields` as a standalone pipeline stage AFTER the `$addFields` that creates the base data.
+
 ### Requirement Checklist Before Output
 Before writing the pipeline, mentally verify:
 - [ ] All required collections are looked up
@@ -175,11 +185,11 @@ Before writing the pipeline, mentally verify:
 - [ ] All sorting requirements are met
 - [ ] All flag fields are projected in the final output
 - [ ] No `$graphLookup` appears inside an expression (only as a pipeline stage)
-- [ ] `$setWindowFields` is only at the top level, never inside $lookup or $facet
+- [ ] `$setWindowFields` is only at the top level, never inside $lookup, $facet, or $addFields
 - [ ] Computed fields on ancestors/related docs are re-computed inside their own sub-pipeline
 - [ ] Time-series stages begin with a time-restricting $match
 - [ ] Operator/actor-event correlations have an explicit $lookup to the events collection
-- [ ] Every `$filter` has an explicit `as` parameter — no `$$this` used
+- [ ] Every `$filter` has an explicit `as` parameter — no `$$this` used (even inside $map or $let)
 - [ ] Percentile flags use `$percent_rank`, NOT `$rank`
 - [ ] Both sides of symmetric operations (buy+sell, in+out) are implemented
 - [ ] Duration calculations across collections use a $lookup to get timestamps
@@ -188,6 +198,7 @@ Before writing the pipeline, mentally verify:
 - [ ] `$indexOfArray` results are guarded against -1
 - [ ] All join fields exist in the schema — no invented field names
 - [ ] Every outer field used inside a $lookup sub-pipeline is declared in `let` and accessed as `$$var`
+- [ ] Every field referenced in `$project` was computed in a prior stage or exists in the schema
 - [ ] Consecutive N-day detection uses time-series gap analysis, not a proxy field
 - [ ] Pre-event window correlations use a correlated time-bounded $lookup
 - [ ] Array-of-IDs graph traversal uses `$graphLookup` with array `startWith`
@@ -308,14 +319,40 @@ def validate_mongodb_query(query: str) -> list[str]:
     warnings = []
 
     # Check 1: $filter missing 'as' parameter ($$this misuse)
-    filter_blocks = re.findall(r'\$filter\s*:\s*\{([^}]{0,300})\}', query, re.DOTALL)
-    for block in filter_blocks:
-        if '"as"' not in block and "'as'" not in block and 'as:' not in block:
-            warnings.append(
-                '$filter is missing the "as" parameter — $$this is not valid in $filter. '
-                'Add as: "elem" and reference $$elem.field in the cond.'
-            )
-            break
+    # Robust depth-tracking approach: finds ALL $filter blocks at any nesting depth
+    # and checks whether 'as' is declared before the first 'cond' within that block.
+    filter_as_missing = False
+    filter_depth = 0
+    in_filter = False
+    filter_buffer = []
+    for line in query.split('\n'):
+        stripped = line.strip()
+        if '$filter' in stripped and not in_filter:
+            in_filter = True
+            filter_depth = stripped.count('{') - stripped.count('}')
+            filter_buffer = [stripped]
+        elif in_filter:
+            filter_depth += stripped.count('{') - stripped.count('}')
+            filter_buffer.append(stripped)
+            if filter_depth <= 0:
+                # End of this $filter block — check the collected buffer for 'as'
+                block_text = ' '.join(filter_buffer)
+                has_as = ('"as"' in block_text or "'as'" in block_text or
+                          ' as:' in block_text or ',as:' in block_text or '{ as:' in block_text)
+                has_this = '$$this' in block_text
+                if has_this and not has_as:
+                    filter_as_missing = True
+                    break
+                in_filter = False
+                filter_depth = 0
+                filter_buffer = []
+    if filter_as_missing:
+        warnings.append(
+            '$filter block uses $$this without defining an "as" parameter. '
+            '$$this is NOT a valid iterator variable in $filter. '
+            'Add as: "elem" (or any name) and use $$elem.field in cond. '
+            'This applies even when $filter is nested inside $map or $let.'
+        )
 
     # Check 2: $dateSubtract / $dateAdd used directly as a $match value without $expr
     date_op_in_match = re.search(
@@ -381,6 +418,31 @@ def validate_mongodb_query(query: str) -> list[str]:
         warnings.append(
             '$setWindowFields detected inside a $lookup sub-pipeline — it is a top-level stage only. '
             'Materialise the $lookup result first at the top level, then apply $setWindowFields.'
+        )
+
+    # Check 12: $setWindowFields used inside $addFields expression context (always a crash)
+    # $setWindowFields is a pipeline STAGE — it cannot be a value inside $addFields
+    addfields_window = False
+    addfields_depth = 0
+    in_addfields = False
+    for line in query.split('\n'):
+        stripped = line.strip()
+        if '$addFields' in stripped and not in_addfields:
+            in_addfields = True
+            addfields_depth = stripped.count('{') - stripped.count('}')
+        elif in_addfields:
+            addfields_depth += stripped.count('{') - stripped.count('}')
+            if '$setWindowFields' in stripped:
+                addfields_window = True
+                break
+            if addfields_depth <= 0:
+                in_addfields = False
+                addfields_depth = 0
+    if addfields_window:
+        warnings.append(
+            '$setWindowFields used inside $addFields — this is a runtime error. '
+            '$setWindowFields is a pipeline stage, not an expression operator. '
+            'Remove it from $addFields and place it as a standalone stage in the pipeline.'
         )
 
     # Check 11: Outer document field accessed directly inside $lookup sub-pipeline without let

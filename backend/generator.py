@@ -36,13 +36,39 @@ Question: {question}
 ### Multiple Collections
 9. If the question references data from multiple collections, you MUST include a `$lookup` stage for EACH collection. Never assume data is already present in the root document.
 
+### Computed Fields on Related Documents (CRITICAL)
+10. If you need to filter or flag ancestor/related documents using a computed value (e.g. filtering ancestors by a calculated accuracy score), you MUST re-compute that value INSIDE the sub-pipeline or $lookup for those related documents. NEVER reference a computed field that only exists on the root document and assume it is available on joined/ancestor documents. Always compute independently per related document.
+
+### Date Filters Inside Nested Arrays
+11. When filtering embedded array elements by a date condition (e.g. audits in the last 12 months, events in the last 30 days), you MUST apply the date $match INSIDE the array element filter — not just on top-level fields. Use `$filter` on the array with BOTH a date condition AND the logic condition combined in a `$and`. Example: to find failed audits in the last 12 months, filter `audit_history` where `audited_at >= 12 months ago AND passed == false`.
+
+### Flag Projection — Never Leave Flags Unprojected
+12. Every flag computed from joined/looked-up data (e.g. reliability_score < 60, compliance_score < 70, score < threshold) MUST be explicitly included in the final `$project` stage or inside the relevant sub-document output. Never compute a flag inside a `$lookup` sub-pipeline and then fail to surface it in the final output.
+
+### Array Count Conditions (e.g. "more than N elements matching X")
+13. To identify documents where a sub-array has more than N elements matching a condition, you MUST:
+    Step A — Use `$addFields` with `$filter` to materialise the matching sub-array into a new field.
+    Step B — Use `$size` on that filtered field.
+    Step C — Use `$match` on the computed size field.
+    NEVER count inline without materialising the filtered array first into an `$addFields` stage.
+
+### Operator / Actor — Event Correlation
+14. If the question asks to correlate an actor (operator, user, trader) with events they performed (e.g. "flag operators who handled more damaged/expired events"), you MUST add a `$lookup` from the actors array/collection into the events collection, grouping by actor_id AND event_type, then join that result back. Never skip this correlation — do not just project the actor list without event data.
+
+### Time-Window Metrics
+15. When computing time-series metrics for a specific window (last 8 weeks, last 30 days, etc.), you MUST add a `$match` stage at the START of the relevant pipeline or sub-pipeline to restrict documents to only that time window BEFORE any `$group` or `$setWindowFields`. Never group across all time and assume the window is implied.
+
 ### Requirement Checklist Before Output
 Before writing the pipeline, mentally verify:
 - [ ] All required collections are looked up
 - [ ] All grouping/aggregation calculations are present
-- [ ] All filtering conditions are applied
+- [ ] All filtering conditions are applied (including date ranges inside nested arrays)
 - [ ] All sorting requirements are met
+- [ ] All flag fields are projected in the final output
 - [ ] No `$graphLookup` appears inside an expression (only as a pipeline stage)
+- [ ] Computed fields on ancestors/related docs are re-computed inside their own sub-pipeline
+- [ ] Time-series stages begin with a time-restricting $match
+- [ ] Operator/actor-event correlations have an explicit $lookup to the events collection
 
 ## Output Format (plain text, no markdown backticks):
 QUERY: <the complete MongoDB aggregation pipeline starting with db.collection.aggregate([...])>

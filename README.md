@@ -6,26 +6,29 @@
 [![Stack](https://img.shields.io/badge/Stack-React_|_FastAPI_|_Gemini-blueviolet?style=flat-square)]()
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)]()
 
-A professional-grade database engineering tool that leverages **Google Gemini AI** to analyze SQL execution plans, identify bottlenecks, and generate optimized queries for **PostgreSQL**, **MySQL**, and **SQLite**.
+A professional-grade database engineering tool that leverages **Google Gemini** and **Groq Llama-3** to analyze execution plans and generate highly optimized, enterprise-level queries for **PostgreSQL**, **MySQL**, **SQLite**, and **MongoDB**.
 
 ---
 
-## ✨ Features
+## ✨ Enterprise Features
+
+### 🛡️ Multi-Provider API Resilience
+*   **Primary Engine:** Google Gemini (`gemini-flash-latest`) for rapid static analysis and generation.
+*   **Auto-Failover:** Automatically cascades to Groq's flagship `llama-3.3-70b-versatile` if Gemini rate limits are hit, ensuring 100% uptime without user intervention.
+*   **Deterministic Fallback:** Degrades seamlessly to a simulated heuristic engine if no API keys are available.
+
+### 🧠 Elite Analytics Guardrails
+The system isn't a basic text-to-SQL wrapper. It enforces **34+ strict architectural rules** during generation:
+*   **Advanced SQL:** Forces strict CTE scoping, `GENERATE_SERIES()` for sparse time-series forecasting, and mathematically flawless rolling averages.
+*   **MongoDB Mastery:** Safely handles recursive `$graphLookup` trees with `maxDepth` limits, `$setWindowFields` time-decay scoring, and faceted analytics without crashing.
 
 ### 🔍 Intelligent Optimization
 *   **Static Analysis:** Identify full table scans, missing indexes, and `SELECT *` anti-patterns.
-*   **AI Insights:** Uses `gemini-flash-latest` to act as an expert DBA, explaining *why* a query is slow.
-*   **Dialect Aware:** Generates optimization advice specific to your database engine (Postgres vs MySQL).
+*   **Dialect Aware:** Generates optimization advice specific to your database engine.
 
-### ✍️ Text-to-SQL Generator
-*   **Natural Language:** "Find users who ordered last week" -> `SELECT ...`
-*   **Schema Aware:** Injects your table definitions into the context to prevent hallucinations.
-*   **Multi-Dialect:** Supports syntax for Postgres (`EXTRACT`), MySQL (`DATE_ADD`), and SQLite (`strftime`).
-
-### 🛡️ Enterprise Ready
-*   **Secure:** API Keys are handled via Environment Variables (never stored in code).
-*   **Fail-Safe:** Graceful error handling with explicit feedback on Quota limits.
-*   **Modern UI:** "Cosmic Dark" theme with glassmorphism, animations, and responsive design.
+### ✍️ Schema-Aware Generator
+*   **Natural Language to Pipeline:** Translates "Find viral contagion risk" into 250+ line MongoDB aggregation pipelines or 10+ chained Postges CTEs.
+*   **Context Injection:** Injects user table definitions into the AI context to prevent hallucinations and invent secure joins.
 
 ---
 
@@ -112,37 +115,11 @@ The application follows a **Hybrid Cloud Architecture**:
 ---
 
 ## 🛠️ Deployment
-See the [Deployment Guide](./deployment_guide.md) for detailed instructions on deploying to **Render** and **Netlify**.
-![Tech Stack](https://img.shields.io/badge/Stack-React_|_FastAPI_|_Gemini_Pro-blueviolet)
-![License](https://img.shields.io/badge/License-MIT-blue)
-
-**A hybrid, intelligent SQL engineering tool that combines static analysis with the power of Google's Gemini Pro LLM.**
-
-This application serves as a comprehensive "SQL Companion" for developers and data analysts, offering real-time query optimization suggestions and natural language to SQL generation.
-
-## 🌟 Key Features
-
-### 🧠 Hybrid AI Engine
-The core of this project is its **resilient, fail-safe architecture**:
-*   **Real AI Mode:** When a valid `GEMINI_API_KEY` is present, the system leverages **Google Gemini Pro** to perform deep, context-aware analysis of arbitrary queries and schemas.
-*   **Demo Mode (Fail-Safe):** If the API key is missing or quota is exceeded, the system seamlessly degrades to a **Simulated Heuristic Engine**. This ensures the application *never* breaks and is always available for demonstration purposes.
-
-### ⚡ Performance Optimizer
-*   **Execution Plan Analysis:** Simulates/Retrieves `EXPLAIN ANALYZE` metrics (Cost, Rows, Node Types).
-*   **Smart Suggestions:** Identifies common anti-patterns (e.g., `SELECT *`, Unbounded queries, Leading wildcards).
-*   **Auto-Fix:** Generates optimized SQL rewrites instantly.
-
-### 🗣️ Text-to-SQL Generator
-*   **Natural Language Processing:** Translates plain English questions (e.g., *"Find top users by sales"*) into syntactically correct SQL.
-*   **Schema-Aware:** Understands custom table definitions provided on the fly.
-
----
-
 ## 🛠️ Tech Stack
 
 *   **Frontend:** React, TypeScript, Vite, Tailwind CSS, Framer Motion (for smooth UI/UX).
-*   **Backend:** Python, FastAPI, Uvicorn, Google Generative AI (`google-generativeai`).
-*   **Deployment:** designed for Render (Backend) and Netlify (Frontend).
+*   **Backend:** Python, FastAPI, Uvicorn, Google Generative AI (`google-generativeai`), Groq (`groq`).
+*   **Deployment:** Designed for Render (Backend) and Netlify (Frontend).
 
 ---
 

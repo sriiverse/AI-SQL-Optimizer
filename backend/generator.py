@@ -107,12 +107,28 @@ Question: {question}
 27. Any schema field marked as optional or that could be null (e.g. `resolved_at`, `parent_id`, `actual_arrival`) MUST be wrapped with `$ifNull` before arithmetic or comparison. Also use `$cond` to skip null documents in averages: `$avg: {{ $cond: [{{ $ne: ["$field", null] }}, "$field", null] }}`.
 
 ### Consecutive N-Day Detection — Time-Series Gap Analysis Only
-28. "Sensor/device/user offline/inactive for more than N consecutive days" CANNOT be detected using a proxy field like `last_calibrated`, `last_active`, or `updated_at`. Those fields only tell you the last update time, not a gap in a continuous time series.
-    The correct approach:
-    Step A — `$lookup` into the readings/events collection for that sensor, sorted by timestamp.
-    Step B — Use `$setWindowFields` with `$dateDiff` from the previous reading (`$shift: {{ by: -1 }}`).
-    Step C — Find the maximum gap. If max gap > N days, the sensor was offline for N consecutive days.
-    Never approximate with a proxy field.
+28. "Sensor/device/user offline/inactive for more than N consecutive days" CANNOT be detected using a proxy field like `last_calibrated`, `last_active`, or `updated_at`. Those fields only tell you the last update time, not a gap in a continuous time series. This rule is NON-NEGOTIABLE — even if using a proxy seems simpler, it gives wrong results.
+    The ONLY correct approach (use this exact pattern):
+    ```
+    // Step A: lookup all readings for the sensor, sorted by time
+    {{ $lookup: {{ from: "readings", let: {{ sid: "$sensor_id" }},
+      pipeline: [
+        {{ $match: {{ $expr: {{ $eq: ["$sensor_id", "$$sid"] }} }} }},
+        {{ $sort: {{ recorded_at: 1 }} }},
+        // Step B: compute gap from previous reading using $shift
+        {{ $setWindowFields: {{ sortBy: {{ recorded_at: 1 }},
+          output: {{ gap_hours: {{ $dateDiff: {{
+            startDate: {{ $shift: {{ output: "$recorded_at", by: -1 }} }},
+            endDate: "$recorded_at", unit: "hour"
+          }} }} }} }} }},
+        // Step C: find max gap
+        {{ $group: {{ _id: null, max_gap_hours: {{ $max: "$gap_hours" }} }} }}
+      ], as: "gap_analysis" }}
+    }},
+    // Step D: flag as offline if max gap > 7*24 hours
+    {{ $addFields: {{ is_offline_7d: {{ $gt: [{{ $arrayElemAt: ["$gap_analysis.max_gap_hours", 0] }}, 168] }} }} }}
+    ```
+    NEVER use last_calibrated, last_active, or any single timestamp field to infer consecutive gaps.
 
 ### Cross-Timestamp Window Correlation
 29. When the question asks for data "in the X hours/days BEFORE each event" (e.g. readings in the 24h window before each incident), you MUST use a correlated `$lookup` with a time-bounded sub-pipeline:
@@ -143,6 +159,14 @@ Question: {question}
     `$floor: {{ $divide: [{{ $subtract: ["$$NOW", "$date_field"] }}, 7*24*3600000] }}`
     This gives 0 for current week, 1 for last week, etc. Never use `$week` for rolling window grouping.
 
+### $lookup Sub-Pipeline Variable Scope — Always Declare `let`
+32. A `$lookup` sub-pipeline runs in a SEPARATE scope and CANNOT access the outer document's fields directly. Any outer field you need inside the sub-pipeline MUST be declared in the `let` block and referenced as `$$variable_name`.
+    WRONG — this silently fails (sub-pipeline cannot see `$zone_incidents`):
+    `{{ $match: {{ $expr: {{ $in: ["$incident_id", "$zone_incidents.incident_id"] }} }} }}`
+    CORRECT — declare it in `let` first:
+    `$lookup: {{ from: "work_orders", let: {{ inc_ids: "$zone_incidents.incident_id" }}, pipeline: [{{ $match: {{ $expr: {{ $in: ["$incident_id", "$$inc_ids"] }} }} }}], as: "..." }}`
+    Always pass every outer field through `let`. This applies even when the outer field is a computed/added field from a previous stage.
+
 ### Requirement Checklist Before Output
 Before writing the pipeline, mentally verify:
 - [ ] All required collections are looked up
@@ -163,6 +187,7 @@ Before writing the pipeline, mentally verify:
 - [ ] Every `$size`/`$avg` on a possibly-null field is wrapped with `$ifNull`
 - [ ] `$indexOfArray` results are guarded against -1
 - [ ] All join fields exist in the schema — no invented field names
+- [ ] Every outer field used inside a $lookup sub-pipeline is declared in `let` and accessed as `$$var`
 - [ ] Consecutive N-day detection uses time-series gap analysis, not a proxy field
 - [ ] Pre-event window correlations use a correlated time-bounded $lookup
 - [ ] Array-of-IDs graph traversal uses `$graphLookup` with array `startWith`
@@ -335,16 +360,60 @@ def validate_mongodb_query(query: str) -> list[str]:
         )
 
     # Check 6: $setWindowFields inside a $lookup sub-pipeline
-    # Heuristic: $lookup appears before $setWindowFields within 2000 chars
-    lookup_then_window = re.search(
-        r'\$lookup\s*:\s*\{[^{}]{0,2000}\$setWindowFields',
-        query, re.DOTALL
-    )
-    if lookup_then_window:
+    # Robust approach: track brace depth to detect $setWindowFields nested inside $lookup
+    lookup_depth = 0
+    in_lookup = False
+    setwindow_in_lookup = False
+    for line in query.split('\n'):
+        stripped = line.strip()
+        if '$lookup' in stripped and not in_lookup:
+            in_lookup = True
+            lookup_depth = stripped.count('{') - stripped.count('}')
+        elif in_lookup:
+            lookup_depth += stripped.count('{') - stripped.count('}')
+            if '$setWindowFields' in stripped:
+                setwindow_in_lookup = True
+                break
+            if lookup_depth <= 0:
+                in_lookup = False
+                lookup_depth = 0
+    if setwindow_in_lookup:
         warnings.append(
             '$setWindowFields detected inside a $lookup sub-pipeline — it is a top-level stage only. '
-            'Materialise the $lookup result first, then apply $setWindowFields at the top level.'
+            'Materialise the $lookup result first at the top level, then apply $setWindowFields.'
         )
+
+    # Check 11: Outer document field accessed directly inside $lookup sub-pipeline without let
+    # Pattern: $match $expr references a "$fieldName" that looks like it comes from the outer doc
+    # Heuristic: inner pipeline $match uses "$" + word that is NOT declared in a let block nearby
+    lookup_blocks = re.findall(
+        r'\$lookup\s*:\s*\{(.*?)\}\s*(?:,|\])',
+        query, re.DOTALL
+    )
+    for block in lookup_blocks:
+        # Find fields declared in let
+        let_vars = set(re.findall(r'(\w+)\s*:\s*["\']?\$[\w.]+["\']?', 
+                                   block[:block.find('pipeline')] if 'pipeline' in block else ''))
+        # Find "$field" references in the pipeline section that are NOT $$vars
+        pipeline_section = block[block.find('pipeline'):] if 'pipeline' in block else ''
+        outer_field_refs = re.findall(r'(?<!\$)\$([a-zA-Z_]\w+(?:\.\w+)?)', pipeline_section)
+        suspicious = [f for f in outer_field_refs 
+                      if f not in let_vars 
+                      and not f.startswith('$')
+                      and len(f) > 1
+                      and f not in ('expr', 'match', 'and', 'or', 'in', 'eq', 'ne', 'gt', 'lt', 
+                                     'gte', 'lte', 'add', 'sum', 'avg', 'size', 'filter',
+                                     'concat', 'cond', 'ifNull', 'arrayElemAt', 'map',
+                                     'group', 'sort', 'lookup', 'project', 'unwind', 'limit',
+                                     'ROOT', 'NOW', 'REMOVE', 'KEEP')]
+        if suspicious:
+            warnings.append(
+                f'$lookup sub-pipeline may reference outer document field(s) without declaring them in `let`: '
+                f'{list(set(suspicious))[:3]}. '
+                'Inner sub-pipelines cannot access outer fields directly. '
+                'Declare them in the `let` block and use $$varName inside the pipeline.'
+            )
+            break  # One warning is enough
 
     # Check 7: $divide without zero-protection ($max or $cond guard)
     # Pattern: $divide: [x, "$field"] where the denominator is not wrapped

@@ -73,6 +73,76 @@ Question: {question}
 ### Cross-Collection Duration Calculations
 19. When the question asks for average duration, elapsed time, or time-between-events that spans multiple documents or collections (e.g. average match duration from brackets.match_id → matches.started_at/ended_at), you MUST add a `$lookup` to join the related collection by ID and compute the duration as `$subtract: [ended_at, started_at]` on the joined documents. Never omit this join and leave duration uncomputed.
 
+### Stage Placement — $setWindowFields Scope
+20. `$setWindowFields` is a TOP-LEVEL pipeline stage only. It CANNOT be used inside a `$lookup` sub-pipeline, `$facet` branch, or any nested pipeline. If you need window calculations on joined data, materialise the join first at the top level, then apply `$setWindowFields`.
+
+### Stage Placement — $facet Output Shape
+21. After a `$facet` stage, the output is a SINGLE document where each key contains an array of results. All subsequent stages operate on that single document, not on the original collection's documents. Never assume fields from before `$facet` are accessible as if `$facet` was not there — reference them via the facet key names.
+
+### Zero Division Guard — Always Protect $divide
+22. EVERY `$divide` expression MUST be zero-protected. Never write `$divide: [a, b]` without guarding `b`. Use:
+    `$cond: [{{ $eq: [b, 0] }}, 0, {{ $divide: [a, b] }}]`
+    OR: `$divide: [a, {{ $max: [b, 1] }}]`
+    This applies in ALL contexts: $addFields, $project, $group, $setWindowFields, sub-pipelines.
+
+### Nullable Field Guard — Always $ifNull Before $size or $avg
+23. NEVER call `$size`, `$avg`, `$sum`, or `$max` directly on a field that might be null or missing. Always wrap with `$ifNull`:
+    - `$size: {{ $ifNull: ["$array_field", []] }}`
+    - `$avg: {{ $ifNull: ["$field", 0] }}`
+    Calling `$size` on a null field throws a runtime error.
+
+### $indexOfArray Safety — Guard the -1 Return Value
+24. `$indexOfArray` returns -1 when the element is not found. If you then use that result as an index in `$arrayElemAt`, it returns the LAST element instead of null. Always guard: `$cond: [{{ $ne: [idx, -1] }}, {{ $arrayElemAt: [arr, idx] }}, null]`.
+
+### Schema Field Validation — Only Use Fields That Exist
+25. Before writing any `$lookup`, `$match`, or field access, verify that EVERY field you reference actually exists in the schema provided. NEVER invent a field (e.g. `zone_id` on `work_orders` if the schema shows only `incident_id` and `sensor_id`). If you need to join through an intermediate collection, perform a multi-hop join: A → B → C, not A → C with a nonexistent field.
+
+### Embedded Array Field Access — $unwind or Array Expressions Required
+26. A field inside an embedded array is NOT accessible as a top-level field. For example, if `subscriptions` is an array and you want to filter by `subscriptions.creator_id`, you MUST either:
+    - `$unwind: "$subscriptions"` first, then `$match`, OR
+    - Use `$filter` / `$elemMatch` inside an expression.
+    Never access `"$subscriptions.creator_id"` as a simple field path on the root document.
+
+### Defensively Guard All Possibly-Missing Fields
+27. Any schema field marked as optional or that could be null (e.g. `resolved_at`, `parent_id`, `actual_arrival`) MUST be wrapped with `$ifNull` before arithmetic or comparison. Also use `$cond` to skip null documents in averages: `$avg: {{ $cond: [{{ $ne: ["$field", null] }}, "$field", null] }}`.
+
+### Consecutive N-Day Detection — Time-Series Gap Analysis Only
+28. "Sensor/device/user offline/inactive for more than N consecutive days" CANNOT be detected using a proxy field like `last_calibrated`, `last_active`, or `updated_at`. Those fields only tell you the last update time, not a gap in a continuous time series.
+    The correct approach:
+    Step A — `$lookup` into the readings/events collection for that sensor, sorted by timestamp.
+    Step B — Use `$setWindowFields` with `$dateDiff` from the previous reading (`$shift: {{ by: -1 }}`).
+    Step C — Find the maximum gap. If max gap > N days, the sensor was offline for N consecutive days.
+    Never approximate with a proxy field.
+
+### Cross-Timestamp Window Correlation
+29. When the question asks for data "in the X hours/days BEFORE each event" (e.g. readings in the 24h window before each incident), you MUST use a correlated `$lookup` with a time-bounded sub-pipeline:
+    ```
+    $lookup: {{
+      from: "readings",
+      let: {{ event_time: "$detected_at" }},
+      pipeline: [
+        {{ $match: {{ $expr: {{ $and: [
+          {{ $gte: ["$recorded_at", {{ $subtract: ["$$event_time", 24*3600000] }}] }},
+          {{ $lte: ["$recorded_at", "$$event_time"] }}
+        ] }} }} }}
+      ],
+      as: "pre_event_readings"
+    }}
+    ```
+    Never skip this and report "no weather context available".
+
+### Array-of-IDs Graph Traversal — $graphLookup with Array startWith
+30. When a document contains an array of related IDs (e.g. `linked_incident_ids: ["id1","id2"]`) that form a traversable graph, use `$graphLookup` with:
+    - `startWith: "$linked_incident_ids"` (pass the ARRAY directly — MongoDB handles it)
+    - `connectFromField: "linked_incident_ids"`
+    - `connectToField: "incident_id"` (or `_id`)
+    This correctly traverses the graph up to `maxDepth` hops. Never try to simulate this with repeated `$lookup` stages.
+
+### $week Is Not a Sliding Window
+31. `$week` returns the ISO calendar week number (1–52). It CANNOT be used to compute relative windows like "last 8 weeks". Two readings 8 weeks apart may have consecutive `$week` values in the same year. For sliding time windows, compute relative week index using:
+    `$floor: {{ $divide: [{{ $subtract: ["$$NOW", "$date_field"] }}, 7*24*3600000] }}`
+    This gives 0 for current week, 1 for last week, etc. Never use `$week` for rolling window grouping.
+
 ### Requirement Checklist Before Output
 Before writing the pipeline, mentally verify:
 - [ ] All required collections are looked up
@@ -81,13 +151,22 @@ Before writing the pipeline, mentally verify:
 - [ ] All sorting requirements are met
 - [ ] All flag fields are projected in the final output
 - [ ] No `$graphLookup` appears inside an expression (only as a pipeline stage)
+- [ ] `$setWindowFields` is only at the top level, never inside $lookup or $facet
 - [ ] Computed fields on ancestors/related docs are re-computed inside their own sub-pipeline
 - [ ] Time-series stages begin with a time-restricting $match
 - [ ] Operator/actor-event correlations have an explicit $lookup to the events collection
-- [ ] Every `$filter` has an explicit `as` parameter — no `$$this` used anywhere
+- [ ] Every `$filter` has an explicit `as` parameter — no `$$this` used
 - [ ] Percentile flags use `$percent_rank`, NOT `$rank`
 - [ ] Both sides of symmetric operations (buy+sell, in+out) are implemented
 - [ ] Duration calculations across collections use a $lookup to get timestamps
+- [ ] Every `$divide` is zero-protected with `$cond` or `$max`
+- [ ] Every `$size`/`$avg` on a possibly-null field is wrapped with `$ifNull`
+- [ ] `$indexOfArray` results are guarded against -1
+- [ ] All join fields exist in the schema — no invented field names
+- [ ] Consecutive N-day detection uses time-series gap analysis, not a proxy field
+- [ ] Pre-event window correlations use a correlated time-bounded $lookup
+- [ ] Array-of-IDs graph traversal uses `$graphLookup` with array `startWith`
+- [ ] Time windows use relative offsets, not `$week`
 
 ## Output Format (plain text, no markdown backticks):
 QUERY: <the complete MongoDB aggregation pipeline starting with db.collection.aggregate([...])>
@@ -253,6 +332,59 @@ def validate_mongodb_query(query: str) -> list[str]:
             f'Pipeline may be truncated — brackets mismatched '
             f'([ {open_sq} vs ] {close_sq}, {{ {open_cu} vs }} {close_cu}). '
             'Consider splitting into smaller sub-queries.'
+        )
+
+    # Check 6: $setWindowFields inside a $lookup sub-pipeline
+    # Heuristic: $lookup appears before $setWindowFields within 2000 chars
+    lookup_then_window = re.search(
+        r'\$lookup\s*:\s*\{[^{}]{0,2000}\$setWindowFields',
+        query, re.DOTALL
+    )
+    if lookup_then_window:
+        warnings.append(
+            '$setWindowFields detected inside a $lookup sub-pipeline — it is a top-level stage only. '
+            'Materialise the $lookup result first, then apply $setWindowFields at the top level.'
+        )
+
+    # Check 7: $divide without zero-protection ($max or $cond guard)
+    # Pattern: $divide: [x, "$field"] where the denominator is not wrapped
+    unguarded_divides = re.findall(r'\$divide\s*:\s*\[([^\]]{0,200})\]', query, re.DOTALL)
+    for div_expr in unguarded_divides:
+        has_guard = ('$max' in div_expr or '$cond' in div_expr or
+                     '$ifNull' in div_expr or 'NULLIF' in div_expr.upper())
+        if not has_guard and ('$' in div_expr):
+            warnings.append(
+                '$divide used without zero-protection on a variable denominator. '
+                'Wrap as: $cond: [{ $eq: [denom, 0] }, 0, { $divide: [num, denom] }] '
+                'or $divide: [num, { $max: [denom, 1] }]'
+            )
+            break  # Warn once
+
+    # Check 8: $size on a field without $ifNull guard
+    # Pattern: "$size": "$field_name" (direct, no $ifNull wrapping)
+    raw_size = re.search(r'["\']?\$size["\']?\s*:\s*["\$][a-zA-Z_]', query)
+    if raw_size:
+        warnings.append(
+            '$size called directly on a field reference without $ifNull — if the field is null or '
+            'missing this will throw a runtime error. Use: $size: { $ifNull: ["$field", []] }'
+        )
+
+    # Check 9: $indexOfArray result used directly as $arrayElemAt index without -1 guard
+    if '$indexOfArray' in query and '$arrayElemAt' in query:
+        # Check if there is no $ne or $cond between them as a guard
+        if not re.search(r'\$indexOfArray.{0,200}\$ne.{0,50}-1', query, re.DOTALL):
+            warnings.append(
+                '$indexOfArray result may be passed to $arrayElemAt without a -1 guard. '
+                'When the element is not found, $indexOfArray returns -1, making $arrayElemAt '
+                'return the last element. Guard with: $cond: [{ $ne: [idx, -1] }, { $arrayElemAt: [arr, idx] }, null]'
+            )
+
+    # Check 10: $week used for sliding time-window grouping (not calendar-aware use)
+    if re.search(r'\$week\b', query) and re.search(r'(last\s*\d+\s*week|week.*window|rolling)', query, re.IGNORECASE):
+        warnings.append(
+            '$week returns an ISO calendar week number (1–52), not a relative sliding window offset. '
+            'For rolling N-week windows use: $floor: { $divide: [{ $subtract: ["$$NOW", "$date"] }, 604800000] } '
+            'to get week offset (0 = current week, 1 = last week, etc.)'
         )
 
     return warnings

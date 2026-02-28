@@ -1,91 +1,138 @@
 from models import TextToSqlResponse
 import os
+import re
 import google.generativeai as genai
 
 async def generate_sql_with_gemini(schema: str, question: str, dialect: str, model: genai.GenerativeModel) -> TextToSqlResponse:
     """
-    Uses a pre-initialized Google Gemini model to generate SQL from natural language + schema.
+    Uses a pre-initialized Google Gemini model to generate SQL/MongoDB from natural language + schema.
     Runs asynchronously to avoid blocking the FastAPI event loop.
     """
     if dialect == "mongodb":
         prompt = f"""
-    You are an expert MongoDB Engineer.
+You are a world-class MongoDB Aggregation Pipeline Engineer with deep expertise in MongoDB 5.0+ features.
 
-    Context (Collection Schema / Sample Documents):
-    {schema}
+Context (Collection Schema / Sample Documents):
+{schema}
 
-    Question: {question}
+Question: {question}
 
-    Task: Generate a valid MongoDB aggregation pipeline or query (using db.collection.find() / db.collection.aggregate()) to answer the question based on the collection schema.
-    Use proper MongoDB operator syntax ($match, $group, $lookup, $project, $sort, $limit, etc.).
-    Also provide a brief explanation of how the pipeline works.
+## CRITICAL RULES — YOU MUST FOLLOW ALL OF THEM:
 
-    Output format:
-    SQL: <the MongoDB query or aggregation pipeline>
-    Explanation: <the explanation>
+### Completeness
+1. You MUST address EVERY requirement stated in the question. Never silently omit a lookup, calculation, or filter.
+2. If the question asks for N things, your pipeline must produce all N things. Skipping even one is unacceptable.
 
-    Separate the query and explanation clearly. Do not wrap in markdown backticks.
-    """
+### Operator Correctness
+3. `$graphLookup` is a PIPELINE STAGE ONLY. NEVER place it inside `$map`, `$addFields`, `$project`, or any expression context. It will throw a runtime error. To traverse relationships, wrap `$graphLookup` inside a `$lookup` sub-pipeline.
+4. Use `$lookup` with `let` + `pipeline` syntax for all correlated joins — NOT simple `localField`/`foreignField` when filtering is needed inside the sub-query.
+5. Use `$setWindowFields` for ALL rolling/cumulative calculations (running totals, moving averages, rolling stddev). Requires MongoDB 5.0+.
+6. For cumulative running totals always use: `window: {{ documents: ["unbounded", "current"] }}`.
+7. For log-return volatility or stddev: use `$stdDevPop` inside `$setWindowFields` with a range window.
+
+### Self-Referencing Hierarchies
+8. To walk a self-referencing collection (e.g. parent_id → id), use `$graphLookup` as a top-level stage. Set `maxDepth` appropriately. Always include `depthField` for ordering the path.
+
+### Multiple Collections
+9. If the question references data from multiple collections, you MUST include a `$lookup` stage for EACH collection. Never assume data is already present in the root document.
+
+### Requirement Checklist Before Output
+Before writing the pipeline, mentally verify:
+- [ ] All required collections are looked up
+- [ ] All grouping/aggregation calculations are present
+- [ ] All filtering conditions are applied
+- [ ] All sorting requirements are met
+- [ ] No `$graphLookup` appears inside an expression (only as a pipeline stage)
+
+## Output Format (plain text, no markdown backticks):
+QUERY: <the complete MongoDB aggregation pipeline starting with db.collection.aggregate([...])>
+Explanation: <step-by-step explanation of each pipeline stage and design decisions>
+"""
     else:
         prompt = f"""
-    You are an expert SQL Generator.
-    
-    Context (Database Schema):
-    {schema}
-    
-    Question: {question}
-    
-    Task: Generate a valid {dialect} query to answer the question based on the schema.
-    Use standard {dialect} syntax.
-    Also provide a brief explanation of how the query works.
-    
-    Output format provided as plain text logic, but structured as:
-    SQL: <the sql query>
-    Explanation: <the explanation>
-    
-    Separate the SQL and explanation clearly.
-    """
-    
+You are an expert {dialect} SQL Engineer with deep knowledge of query optimization and advanced SQL features.
+
+Context (Database Schema):
+{schema}
+
+Question: {question}
+
+## CRITICAL RULES — YOU MUST FOLLOW ALL OF THEM:
+
+### Completeness
+1. You MUST address EVERY part of the question. If the question asks for N things, your query must return all N things.
+2. Never silently omit a JOIN, subquery, filter, or calculation. Skipping any requirement is unacceptable.
+
+### Query Design
+3. Use CTEs (WITH clauses) for any multi-step logic to improve readability and maintainability.
+4. Use window functions (ROW_NUMBER, RANK, LAG, LEAD, SUM OVER, AVG OVER) where appropriate instead of correlated subqueries.
+5. Always apply WHERE/HAVING filters that are explicitly or implicitly required by the question.
+6. Use proper {dialect}-specific syntax only. Do not mix dialects.
+
+### Correctness
+7. Never SELECT columns that don't exist in the schema.
+8. Ensure all JOINs use correct columns and produce the expected cardinality.
+9. If the question involves ranking or top-N per group, use window functions, not subqueries where possible.
+
+## Output Format (plain text, no markdown backticks):
+SQL: <the complete {dialect} query>
+Explanation: <step-by-step explanation of the query logic and design decisions>
+"""
+
     try:
-        # Use async generation to avoid blocking the event loop
         response = await model.generate_content_async(prompt)
         text = response.text.strip()
-        
-        sql_part = ""
+
+        query_part = ""
         exp_part = ""
-        
+
         lines = text.split('\n')
         current_section = None
-        
+
         for line in lines:
-            if line.strip().lower().startswith("sql:"):
-                current_section = "sql"
-                sql_part += line.split(":", 1)[1].strip() + " "
+            stripped = line.strip().lower()
+            # Accept both QUERY: (MongoDB) and SQL: (relational) prefixes
+            if stripped.startswith("query:") or stripped.startswith("sql:") or stripped.startswith("mongodb:"):
+                current_section = "query"
+                query_part += line.split(":", 1)[1].strip() + "\n"
                 continue
-            elif line.strip().lower().startswith("explanation:"):
+            elif stripped.startswith("explanation:"):
                 current_section = "exp"
                 exp_part += line.split(":", 1)[1].strip() + " "
                 continue
-                
-            if current_section == "sql":
-                sql_part += line + " "
+
+            if current_section == "query":
+                query_part += line + "\n"
             elif current_section == "exp":
                 exp_part += line + " "
-                
-        # Fallback if parsing fails
-        if not sql_part:
-            if "select" in text.lower() or "db." in text.lower() or "aggregate" in text.lower():
-                sql_part = text
+
+        # Fallback 1: try to extract from a code fence block
+        if not query_part.strip():
+            code_fence_match = re.search(r'```(?:js|javascript|sql|mongodb)?\n(.*?)```', text, re.DOTALL | re.IGNORECASE)
+            if code_fence_match:
+                query_part = code_fence_match.group(1).strip()
+                exp_part = "Generated based on your question and schema."
+
+        # Fallback 2: use the full response if it looks like a query
+        if not query_part.strip():
+            query_indicators = ["select", "db.", "aggregate", "with ", "insert", "update", "delete"]
+            if any(indicator in text.lower() for indicator in query_indicators):
+                query_part = text
                 exp_part = "Generated based on your question."
             else:
-                return generate_sql_demo(schema, question)
+                # True fallback to demo
+                if dialect == "mongodb":
+                    return generate_mongodb_demo(schema, question)
+                else:
+                    return generate_sql_demo(schema, question)
 
-        # Clean SQL
-        sql_part = sql_part.replace("```sql", "").replace("```", "").strip()
+        # Clean up any stray backticks
+        query_part = re.sub(r'```(?:js|javascript|sql|mongodb)?', '', query_part)
+        query_part = query_part.replace('```', '').strip()
 
         return TextToSqlResponse(
-            query=sql_part,
-            explanation=exp_part.strip()
+            query=query_part,
+            explanation=exp_part.strip() or "Query generated successfully."
         )
 
     except Exception as e:
@@ -95,183 +142,147 @@ async def generate_sql_with_gemini(schema: str, question: str, dialect: str, mod
             explanation=f"AI Generation Failed: {str(e)}"
         )
 
+
+def _extract_first_collection(schema: str) -> str:
+    """
+    Attempts to extract the first collection/table name from a schema string.
+    Works for both JSON sample schemas and SQL DDL.
+    """
+    # Look for db.<collection> pattern
+    mongo_match = re.search(r'//\s*[Cc]ollection:\s*(\w+)', schema)
+    if mongo_match:
+        return mongo_match.group(1)
+
+    # Look for CREATE TABLE <name>
+    sql_match = re.search(r'CREATE\s+TABLE\s+(\w+)', schema, re.IGNORECASE)
+    if sql_match:
+        return sql_match.group(1)
+
+    return "collection"
+
+
 def generate_sql_demo(schema: str, question: str) -> TextToSqlResponse:
     """
-    Simulates Text-to-SQL generation for demo/fallback mode.
+    Fallback SQL demo — pattern-matches intent and returns a realistic query.
+    Note: AI was unavailable; this is a demonstration query only.
     """
-    generated_sql = "SELECT * FROM users WHERE active = true;"
-    explanation = "I analyzed the schema and identified the 'users' table. I filtered by 'active = true' based on your question."
+    q = question.lower()
+    table = _extract_first_collection(schema)
 
-    if "sales" in question.lower():
-        generated_sql = "SELECT SUM(amount) FROM sales WHERE date > NOW() - INTERVAL '30 days';"
-        explanation = "Aggregated sales amount for the last 30 days."
-    
-    if "join" in question.lower() or "orders" in question.lower():
-        generated_sql = """
-SELECT u.name, COUNT(o.id) as order_count 
-FROM users u 
-JOIN orders o ON u.id = o.user_id 
-GROUP BY u.name 
+    if "sales" in q or "revenue" in q:
+        generated_sql = f"SELECT SUM(amount) AS total_revenue FROM {table} WHERE date > NOW() - INTERVAL '30 days';"
+        explanation = f"[Demo Mode — AI unavailable] Aggregated revenue from '{table}' for the last 30 days."
+
+    elif "join" in q or "orders" in q:
+        generated_sql = f"""SELECT u.name, COUNT(o.id) AS order_count
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.name
 ORDER BY order_count DESC;"""
-        explanation = "Joined users and orders to count orders per user, sorting by highest count."
+        explanation = "[Demo Mode — AI unavailable] Joined users and orders to count orders per user."
 
-    if "analytics" in question.lower() or "performance" in question.lower():
-        generated_sql = """
-WITH RegionStats AS (
-    SELECT 
-        r.region_name,
-        p.category,
-        SUM(s.amount) as total_revenue,
-        AVG(s.latency_ms) as avg_latency
-    FROM server_logs s
-    JOIN regions r ON s.region_id = r.id
-    JOIN products p ON s.product_id = p.id
-    WHERE s.timestamp >= NOW() - INTERVAL '24 hours'
-    GROUP BY r.region_name, p.category
+    elif "analytics" in q or "performance" in q:
+        generated_sql = f"""WITH Stats AS (
+    SELECT
+        region,
+        category,
+        SUM(amount)      AS total_revenue,
+        AVG(latency_ms)  AS avg_latency
+    FROM {table}
+    WHERE created_at >= NOW() - INTERVAL '24 hours'
+    GROUP BY region, category
 )
-SELECT * FROM RegionStats 
-WHERE total_revenue > 10000 
+SELECT * FROM Stats
+WHERE total_revenue > 10000
 ORDER BY avg_latency ASC;"""
-        explanation = "Constructed a CTE 'RegionStats' to aggregate revenue and latency by region and category. Filtered for high-revenue regions and sorted by lowest latency for performance analysis."
+        explanation = "[Demo Mode — AI unavailable] CTE aggregating revenue and latency by region and category."
 
-    return TextToSqlResponse(
-        query=generated_sql.strip(),
-        explanation=explanation
-    )
+    else:
+        generated_sql = f"SELECT * FROM {table} LIMIT 100;"
+        explanation = f"[Demo Mode — AI unavailable] Basic query against '{table}'. Provide your schema and question to get an AI-generated query."
+
+    return TextToSqlResponse(query=generated_sql.strip(), explanation=explanation)
 
 
 def generate_mongodb_demo(schema: str, question: str) -> TextToSqlResponse:
     """
-    Simulates MongoDB aggregation pipeline generation for demo/fallback mode.
-    Pattern-matches intent keywords in the question and returns a realistic pipeline.
+    Fallback MongoDB demo — pattern-matches intent and returns a realistic pipeline.
+    Uses the actual collection name extracted from the schema where possible.
+    Note: AI was unavailable; this is a demonstration pipeline only.
     """
     q = question.lower()
+    collection = _extract_first_collection(schema)
 
-    # --- Time-series / recent activity ---
     if any(k in q for k in ["last", "recent", "today", "week", "month", "days"]):
-        pipeline = '''db.orders.aggregate([
-  // Step 1: Filter to recent documents first (enables index usage)
-  { $match: {
-      placed_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
-      status: "delivered"
-  }},
-  // Step 2: Unwind line items
-  { $unwind: "$items" },
-  // Step 3: Group by product
-  { $group: {
-      _id: "$items.product_id",
-      total_revenue: { $sum: { $multiply: ["$items.unit_price", "$items.qty"] } },
-      order_count:   { $sum: 1 }
-  }},
-  // Step 4: Sort by revenue descending
-  { $sort: { total_revenue: -1 } },
-  { $limit: 10 },
-  // Step 5: Enrich with product details
-  { $lookup: {
-      from: "products",
-      localField: "_id",
-      foreignField: "_id",
-      as: "product"
-  }},
-  { $unwind: "$product" },
-  { $project: {
-      name: "$product.name",
-      category: "$product.category_path",
-      total_revenue: 1,
-      order_count: 1
-  }}
+        pipeline = f'''db.{collection}.aggregate([
+  // Step 1: Filter to recent documents (leverages date index)
+  {{ $match: {{
+      created_at: {{ $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }}
+  }}}},
+  // Step 2: Group and aggregate
+  {{ $group: {{
+      _id: "$category",
+      total: {{ $sum: "$amount" }},
+      count: {{ $sum: 1 }}
+  }}}},
+  // Step 3: Sort descending
+  {{ $sort: {{ total: -1 }} }},
+  {{ $limit: 10 }}
 ])'''
-        explanation = "Filtered orders to the last 30 days using an indexed $match, unwound line items, grouped by product to sum revenue, then enriched results with product details via $lookup. $match is placed first to leverage the placed_at index and avoid a COLLSCAN."
+        explanation = f"[Demo Mode — AI unavailable] Filtered '{collection}' to last 30 days, grouped by category, sorted by total descending."
 
-    # --- Join / lookup between collections ---
-    elif any(k in q for k in ["join", "from", "with", "related", "lookup", "belongs"]):
-        pipeline = '''db.users.aggregate([
-  // Step 1: Filter qualifying users
-  { $match: { "profile.tier": { $in: ["premium", "vip"] }, last_active: { $gte: new Date(Date.now() - 7*24*60*60*1000) } } },
-  // Step 2: Join their orders
-  { $lookup: {
-      from: "orders",
-      let: { uid: "$_id" },
+    elif any(k in q for k in ["join", "lookup", "related", "belongs"]):
+        pipeline = f'''db.{collection}.aggregate([
+  {{ $match: {{ status: "active" }} }},
+  {{ $lookup: {{
+      from: "related_collection",
+      let: {{ ref_id: "$_id" }},
       pipeline: [
-        { $match: { $expr: { $eq: ["$user_id", "$$uid"] }, status: "delivered" } },
-        { $sort: { placed_at: -1 } },
-        { $limit: 5 }
+        {{ $match: {{ $expr: {{ $eq: ["$parent_id", "$$ref_id"] }} }} }},
+        {{ $sort: {{ created_at: -1 }} }},
+        {{ $limit: 5 }}
       ],
-      as: "recent_orders"
-  }},
-  // Step 3: Only users with at least one order
-  { $match: { "recent_orders.0": { $exists: true } } },
-  { $project: {
-      username: 1,
-      tier: "$profile.tier",
-      country: "$profile.country",
-      recent_orders: 1
-  }}
+      as: "related_docs"
+  }}}},
+  {{ $match: {{ "related_docs.0": {{ $exists: true }} }} }},
+  {{ $project: {{ name: 1, status: 1, related_docs: 1 }} }}
 ])'''
-        explanation = "Used a $lookup with a correlated sub-pipeline (let/pipeline syntax) to fetch only delivered orders per user, avoiding a full orders collection scan. Pre-filtered users with $match before the $lookup to minimize the number of join evaluations."
+        explanation = f"[Demo Mode — AI unavailable] Looked up related documents for active '{collection}' records using correlated $lookup sub-pipeline."
 
-    # --- Grouping / aggregation / count / sum / average ---
-    elif any(k in q for k in ["group", "count", "sum", "average", "avg", "total", "aggregate"]):
-        pipeline = '''db.reviews.aggregate([
-  // Filter to verified reviews with meaningful sentiment
-  { $match: { verified_purchase: true, posted_at: { $gte: new Date(Date.now() - 90*24*60*60*1000) } } },
-  // Group per product
-  { $group: {
-      _id: "$product_id",
-      avg_rating:        { $avg: "$rating" },
-      avg_sentiment:     { $avg: "$sentiment_score" },
-      review_count:      { $sum: 1 },
-      helpful_votes:     { $sum: "$helpful_votes" }
-  }},
-  // Only products with enough reviews to be statistically significant
-  { $match: { review_count: { $gte: 5 } } },
-  { $sort: { avg_sentiment: -1 } },
-  { $limit: 20 },
-  { $lookup: {
-      from: "products",
-      localField: "_id",
-      foreignField: "_id",
-      as: "product"
-  }},
-  { $unwind: "$product" },
-  { $project: { "product.name": 1, avg_rating: 1, avg_sentiment: 1, review_count: 1 } }
+    elif any(k in q for k in ["group", "count", "sum", "average", "avg", "total"]):
+        pipeline = f'''db.{collection}.aggregate([
+  {{ $match: {{ created_at: {{ $gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) }} }} }},
+  {{ $group: {{
+      _id: "$category",
+      avg_value:   {{ $avg: "$value" }},
+      total_count: {{ $sum: 1 }},
+      total_sum:   {{ $sum: "$amount" }}
+  }}}},
+  {{ $match: {{ total_count: {{ $gte: 5 }} }} }},
+  {{ $sort: {{ total_sum: -1 }} }}
 ])'''
-        explanation = "Filtered to verified recent reviews, grouped by product to compute average rating and AI sentiment score, then eliminated products with fewer than 5 reviews to avoid statistical noise. Enriched with product names via a final $lookup."
+        explanation = f"[Demo Mode — AI unavailable] Grouped '{collection}' by category, computed averages and sums, filtered groups with fewer than 5 documents."
 
-    # --- Top N / ranking / leaderboard ---
-    elif any(k in q for k in ["top", "best", "highest", "most", "rank", "leaderboard"]):
-        pipeline = '''db.events.aggregate([
-  { $match: {
-      event_type: { $in: ["purchase", "add_to_cart"] },
-      occurred_at: { $gte: new Date(Date.now() - 7*24*60*60*1000) }
-  }},
-  { $group: {
-      _id: "$product_id",
-      interaction_count: { $sum: 1 },
-      unique_users: { $addToSet: "$user_id" }
-  }},
-  { $addFields: { unique_user_count: { $size: "$unique_users" } } },
-  { $sort: { interaction_count: -1 } },
-  { $limit: 10 },
-  { $lookup: { from: "products", localField: "_id", foreignField: "_id", as: "product" } },
-  { $unwind: "$product" },
-  { $project: {
-      "product.name": 1, "product.price": 1,
-      interaction_count: 1, unique_user_count: 1
-  }}
+    elif any(k in q for k in ["top", "best", "highest", "most", "rank"]):
+        pipeline = f'''db.{collection}.aggregate([
+  {{ $match: {{ created_at: {{ $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }} }} }},
+  {{ $group: {{
+      _id: "$item_id",
+      interaction_count: {{ $sum: 1 }},
+      unique_users: {{ $addToSet: "$user_id" }}
+  }}}},
+  {{ $addFields: {{ unique_user_count: {{ $size: "$unique_users" }} }} }},
+  {{ $sort: {{ interaction_count: -1 }} }},
+  {{ $limit: 10 }}
 ])'''
-        explanation = "Matched purchase and cart events from the last 7 days, grouped by product to count interactions and unique users ($addToSet for deduplication), sorted by interaction count, and enriched with product metadata."
+        explanation = f"[Demo Mode — AI unavailable] Top 10 items from '{collection}' in the last 7 days ranked by interaction count with unique user deduplication."
 
-    # --- Default: general find with filter ---
     else:
-        pipeline = '''db.users.aggregate([
-  { $match: { "profile.tier": "premium", last_active: { $gte: new Date(Date.now() - 30*24*60*60*1000) } } },
-  { $project: { username: 1, email: 1, tier: "$profile.tier", country: "$profile.country", _id: 0 } },
-  { $limit: 100 }
+        pipeline = f'''db.{collection}.aggregate([
+  {{ $match: {{ status: "active" }} }},
+  {{ $project: {{ _id: 0, name: 1, status: 1, created_at: 1 }} }},
+  {{ $limit: 100 }}
 ])'''
-        explanation = "Filtered the users collection using an indexed $match on tier and last_active, then projected only the required fields to minimize network payload. $limit prevents unbounded result sets."
+        explanation = f"[Demo Mode — AI unavailable] Basic query on '{collection}'. Provide your full schema and question to receive an AI-generated pipeline."
 
-    return TextToSqlResponse(
-        query=pipeline.strip(),
-        explanation=explanation
-    )
+    return TextToSqlResponse(query=pipeline.strip(), explanation=explanation)

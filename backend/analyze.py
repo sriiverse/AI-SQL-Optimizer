@@ -66,11 +66,55 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
     Do not include markdown backticks around the JSON. Just return the raw JSON string.
     """
     
+    text = ""
     try:
         # Use async generation to avoid blocking the event loop
         response = await model.generate_content_async(prompt)
         text = response.text.strip()
+    except Exception as e:
+        error_str = str(e).lower()
+        if "429" in error_str or "quota" in error_str:
+            print("Gemini Rate Limit Hit. Falling back to Groq Llama-3-70b...")
+            groq_key = os.environ.get("GROQ_API_KEY")
+            if groq_key:
+                try:
+                    import groq
+                    client = groq.AsyncGroq(api_key=groq_key)
+                    completion = await client.chat.completions.create(
+                        model="llama3-70b-8192",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.2,
+                        max_tokens=2000
+                    )
+                    text = completion.choices[0].message.content.strip()
+                except Exception as groq_err:
+                    print(f"Groq Fallback Error: {groq_err}")
+                    return AnalysisResult(
+                        original_query=query,
+                        execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
+                        suggestions=[],
+                        optimized_query="ERROR",
+                        explanation=f"AI Analysis Failed (Gemini gave 429, Groq fallback also failed): {str(groq_err)}"
+                    )
+            else:
+                return AnalysisResult(
+                    original_query=query,
+                    execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
+                    suggestions=[],
+                    optimized_query="ERROR",
+                    explanation=f"AI Analysis Failed (Gemini Quota Exceeded, and GROQ_API_KEY not set): {str(e)}"
+                )
+        else:
+            print(f"Gemini Error: {e}")
+            return AnalysisResult(
+                original_query=query,
+                execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
+                suggestions=[],
+                optimized_query="ERROR",
+                explanation=f"AI Analysis Failed: {str(e)}"
+            )
 
+    try:
         # Clean up if model adds markdown formatting
         if text.startswith("```json"):
             text = text[7:]
@@ -107,14 +151,14 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
             explanation=data.get("explanation", "Analysis complete.")
         )
         
-    except Exception as e:
-        print(f"Gemini Error: {e}")
+    except Exception as parse_e:
+        print(f"Parsing response error: {parse_e}")
         return AnalysisResult(
             original_query=query,
             execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
             suggestions=[],
             optimized_query="ERROR",
-            explanation=f"AI Analysis Failed: {str(e)}"
+            explanation=f"Error parsing AI response: {str(parse_e)}"
         )
 
 def analyze_query_demo(query: str) -> AnalysisResult:

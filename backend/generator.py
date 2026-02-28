@@ -239,10 +239,45 @@ SQL: <the complete {dialect} query>
 Explanation: <step-by-step explanation of the query logic and design decisions>
 """
 
+    text = ""
     try:
         response = await model.generate_content_async(prompt)
         text = response.text.strip()
+    except Exception as e:
+        error_str = str(e).lower()
+        if "429" in error_str or "quota" in error_str:
+            print("Gemini Rate Limit Hit. Falling back to Groq Llama-3-70b...")
+            groq_key = os.environ.get("GROQ_API_KEY")
+            if groq_key:
+                try:
+                    import groq
+                    client = groq.AsyncGroq(api_key=groq_key)
+                    completion = await client.chat.completions.create(
+                        model="llama3-70b-8192",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.2,
+                        max_tokens=3000
+                    )
+                    text = completion.choices[0].message.content.strip()
+                except Exception as groq_err:
+                    print(f"Groq Fallback Error: {groq_err}")
+                    return TextToSqlResponse(
+                        query="ERROR",
+                        explanation=f"AI Generation Failed (Gemini gave 429, Groq fallback also failed): {str(groq_err)}"
+                    )
+            else:
+                return TextToSqlResponse(
+                    query="ERROR",
+                    explanation=f"AI Generation Failed (Gemini Quota Exceeded, and GROQ_API_KEY not set): {str(e)}"
+                )
+        else:
+            print(f"Gemini Error: {e}")
+            return TextToSqlResponse(
+                query="ERROR",
+                explanation=f"AI Generation Failed: {str(e)}"
+            )
 
+    try:
         query_part = ""
         exp_part = ""
 
@@ -302,11 +337,11 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
             explanation=explanation
         )
 
-    except Exception as e:
-        print(f"Gemini Error: {e}")
+    except Exception as parse_e:
+        print(f"Parsing response error: {parse_e}")
         return TextToSqlResponse(
             query="ERROR",
-            explanation=f"AI Generation Failed: {str(e)}"
+            explanation=f"Error parsing AI response: {str(parse_e)}"
         )
 
 

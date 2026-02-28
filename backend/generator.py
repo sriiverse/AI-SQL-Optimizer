@@ -61,6 +61,10 @@ Question: {question}
 ### $filter — Always Define `as`, Never Use `$$this`
 16. Inside EVERY `$filter` expression, you MUST define the `as` parameter with an explicit variable name. NEVER use `$$this` as your element variable — it is not a valid iterator variable in `$filter`. Always write: `$filter: {{ input: ..., as: "elem", cond: {{ ... "$$elem.field" ... }} }}`. Using `$$this` without `as` will throw a runtime error.
 
+### Defensive Graph Traversals & Text Matching
+17. Whenever using `$graphLookup` to walk up a hierarchy (e.g. child to parent), you MUST include a `maxDepth` parameter (e.g. `maxDepth: 10`) to prevent infinite loops in cyclic data.
+18. When comparing string categories or statuses from user input against array elements, ALWAYS convert both to lowercase using `$toLower` inside the `$expr` or `$cond` to prevent case-sensitivity misses.
+
 ### Percentile vs Rank — Use Correct Operator
 17. `$rank` returns an ordinal position (1, 2, 3...), NOT a percentage. It CANNOT be used to determine "top 10%". To compute a percentile-based flag:
     - Use `$percent_rank` (MongoDB 5.0+) inside `$setWindowFields`: value will be 0.0 to 1.0.
@@ -229,10 +233,17 @@ Question: {question}
 5. Always apply WHERE/HAVING filters that are explicitly or implicitly required by the question.
 6. Use proper {dialect}-specific syntax only. Do not mix dialects.
 
-### Correctness
+### Correctness & Forecasting Math
 7. Never SELECT columns that don't exist in the schema.
 8. Ensure all JOINs use correct columns and produce the expected cardinality.
 9. If the question involves ranking or top-N per group, use window functions, not subqueries where possible.
+10. To project an 'N-day' forecast based on a rolling average, select the MOST RECENT single rolling average value (e.g., `WHERE date = CURRENT_DATE` or `ORDER BY date DESC LIMIT 1`) and multiply it by N. NEVER sum 30 days of rolling averages together to project demand.
+
+### Enterprise Logic & Edge Cases
+11. **Cohort Scoping**: If the prompt defines a cohort in an early CTE (e.g. "top 5% users"), every subsequent CTE analyzing that cohort MUST explicitly filter or JOIN against the cohort CTE to prevent scope bleed.
+12. **Sparse Time-Series**: For daily rolling averages or metrics over time, you MUST generate a complete calendar series using `GENERATE_SERIES()` (or equivalent recursive CTE) and `LEFT JOIN` your data to it to safely treat days with 0 activity as exactly 0. Never let sparse dates artificially inflate rolling averages.
+13. **Projection Compliance**: If you calculate a requested metric (e.g. Highest Value Domain) in an upstream CTE, you MUST explicitly include that metric in the final `SELECT` projection.
+14. **State Persistence**: If tracking active, completed, or valid entities, you must re-apply the status `WHERE` filter every time you query that base table in a new CTE.
 
 ## Output Format (plain text, no markdown backticks):
 SQL: <the complete {dialect} query>

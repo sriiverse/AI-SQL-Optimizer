@@ -74,7 +74,7 @@ Question: {question}
 19. When the question asks for average duration, elapsed time, or time-between-events that spans multiple documents or collections (e.g. average match duration from brackets.match_id → matches.started_at/ended_at), you MUST add a `$lookup` to join the related collection by ID and compute the duration as `$subtract: [ended_at, started_at]` on the joined documents. Never omit this join and leave duration uncomputed.
 
 ### Stage Placement — $setWindowFields Scope
-20. `$setWindowFields` is a TOP-LEVEL pipeline stage only. It CANNOT be used inside a `$lookup` sub-pipeline, `$facet` branch, or any nested pipeline. If you need window calculations on joined data, materialise the join first at the top level, then apply `$setWindowFields`.
+20. `$setWindowFields` CANNOT be used inside a `$facet` branch, `$addFields`, or inside any expression like `$map` or `$let`. It IS allowed inside a `$lookup` sub-pipeline (e.g. for gap analysis) as long as it is a standalone pipeline stage.
 
 ### Stage Placement — $facet Output Shape
 21. After a `$facet` stage, the output is a SINGLE document where each key contains an array of results. All subsequent stages operate on that single document, not on the original collection's documents. Never assume fields from before `$facet` are accessible as if `$facet` was not there — reference them via the facet key names.
@@ -149,10 +149,10 @@ Question: {question}
 
 ### Array-of-IDs Graph Traversal — $graphLookup with Array startWith
 30. When a document contains an array of related IDs (e.g. `linked_incident_ids: ["id1","id2"]`) that form a traversable graph, use `$graphLookup` with:
-    - `startWith: "$linked_incident_ids"` (pass the ARRAY directly — MongoDB handles it)
+    - `startWith: "$linked_incident_ids"` (pass the ARRAY directly)
     - `connectFromField: "linked_incident_ids"`
     - `connectToField: "incident_id"` (or `_id`)
-    This correctly traverses the graph up to `maxDepth` hops. Never try to simulate this with repeated `$lookup` stages.
+    NEVER put `$graphLookup` inside a `$map` or `$let` expression, as it is a pipeline STAGE, not an expression operator. If you need to run it per array element, you must `$unwind` the array first, perform `$graphLookup`, and then `$group` back.
 
 ### $week Is Not a Sliding Window
 31. `$week` returns the ISO calendar week number (1–52). It CANNOT be used to compute relative windows like "last 8 weeks". Two readings 8 weeks apart may have consecutive `$week` values in the same year. For sliding time windows, compute relative week index using:
@@ -185,7 +185,7 @@ Before writing the pipeline, mentally verify:
 - [ ] All sorting requirements are met
 - [ ] All flag fields are projected in the final output
 - [ ] No `$graphLookup` appears inside an expression (only as a pipeline stage)
-- [ ] `$setWindowFields` is only at the top level, never inside $lookup, $facet, or $addFields
+- [ ] `$setWindowFields` is never inside $facet, $addFields, or an expression (but IS allowed in $lookup)
 - [ ] Computed fields on ancestors/related docs are re-computed inside their own sub-pipeline
 - [ ] Time-series stages begin with a time-restricting $match
 - [ ] Operator/actor-event correlations have an explicit $lookup to the events collection
@@ -396,29 +396,6 @@ def validate_mongodb_query(query: str) -> list[str]:
             'Consider splitting into smaller sub-queries.'
         )
 
-    # Check 6: $setWindowFields inside a $lookup sub-pipeline
-    # Robust approach: track brace depth to detect $setWindowFields nested inside $lookup
-    lookup_depth = 0
-    in_lookup = False
-    setwindow_in_lookup = False
-    for line in query.split('\n'):
-        stripped = line.strip()
-        if '$lookup' in stripped and not in_lookup:
-            in_lookup = True
-            lookup_depth = stripped.count('{') - stripped.count('}')
-        elif in_lookup:
-            lookup_depth += stripped.count('{') - stripped.count('}')
-            if '$setWindowFields' in stripped:
-                setwindow_in_lookup = True
-                break
-            if lookup_depth <= 0:
-                in_lookup = False
-                lookup_depth = 0
-    if setwindow_in_lookup:
-        warnings.append(
-            '$setWindowFields detected inside a $lookup sub-pipeline — it is a top-level stage only. '
-            'Materialise the $lookup result first at the top level, then apply $setWindowFields.'
-        )
 
     # Check 12: $setWindowFields used inside $addFields expression context (always a crash)
     # $setWindowFields is a pipeline STAGE — it cannot be a value inside $addFields

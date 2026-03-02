@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom"
 import { Button } from "../components/ui/button"
 import { AnalysisResults } from "../components/AnalysisResults"
 import { GeneratorResults } from "../components/GeneratorResults"
-import { ArrowLeft, Play, Wand2, Database, Sparkles, ShieldAlert } from "lucide-react"
+import { ArrowLeft, Play, Wand2, Database, Sparkles, ShieldAlert, Star } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
+import { ProConnectionModal } from "../components/ProConnectionModal"
 
 interface OptimizerWorkspaceProps {
     mode: "optimizer" | "generator"
@@ -79,6 +80,9 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     // Optimizer State
     const [sqlQuery, setSqlQuery] = useState<any>("SELECT * FROM users WHERE active = true")
     const [analysisResult, setAnalysisResult] = useState<any>(null)
+
+    // PRO Feature State
+    const [isProModalOpen, setIsProModalOpen] = useState(false)
 
     // Generator State
     const [schemaInput, setSchemaInput] = useState<string>("CREATE TABLE users (id INT, name TEXT, active BOOLEAN);")
@@ -168,6 +172,18 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                     </div>
 
                     <div className="flex items-center gap-3">
+                        {/* PRO Button */}
+                        <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={() => setIsProModalOpen(true)}
+                            className="relative group overflow-hidden px-4 md:px-5 py-1.5 rounded-full bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 border border-purple-500/30 font-semibold text-xs text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] mr-2 flex items-center gap-1.5"
+                        >
+                            <span className="absolute inset-0 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
+                            <Star className="w-3.5 h-3.5 text-yellow-300 drop-shadow-[0_0_8px_rgba(253,224,71,0.8)] fill-yellow-300" />
+                            <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-200 via-purple-200 to-pink-200 tracking-wider">PRO</span>
+                        </motion.button>
+
                         {/* Dialect Selector */}
                         <span className="text-xs text-gray-500 uppercase tracking-widest hidden md:block">Dialect:</span>
                         <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
@@ -397,6 +413,9 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                     <div className="h-8" />
                 </div>
             </div>
+
+            {/* PRO Modal */}
+            <ProConnectionModal isOpen={isProModalOpen} onClose={() => setIsProModalOpen(false)} />
 
             {/* Custom scrollbar styles */}
             <style>{`

@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from models import AnalyzeRequest, AnalysisResult, TextToSqlRequest, TextToSqlResponse
 from analyze import analyze_query_demo, analyze_query_with_gemini, analyze_pipeline_demo
 from generator import generate_sql_demo, generate_sql_with_gemini, generate_mongodb_demo
+from socket_manager import manager
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -81,6 +83,39 @@ async def generate_sql_endpoint(request: TextToSqlRequest):
             return generate_sql_demo(request.schema_def, request.question)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- WebSockets & CLI Agent Logic ---
+
+class ExecuteRequest(BaseModel):
+    client_id: str
+    query: str
+
+@app.websocket("/ws/agent/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    """
+    Endpoint for the local Node.js CLI Agent to connect securely.
+    """
+    await manager.connect(websocket, client_id)
+    try:
+        while True:
+            # Wait for responses from the CLI (e.g., the JSON EXPLAIN plan)
+            data = await websocket.receive_text()
+            print(f"Received from Agent [{client_id}]: {data}")
+            # For this MVP, we just log it. In a complete flow, we would route this 
+            # back to the specific React client waiting for the answer.
+    except WebSocketDisconnect:
+        manager.disconnect(client_id)
+
+@app.post("/agent/execute")
+async def execute_via_agent(request: ExecuteRequest):
+    """
+    React frontend calls this to trigger execution on the user's laptop.
+    """
+    success = await manager.send_execute_command(request.client_id, request.query)
+    if success:
+        return {"status": "success", "message": f"Command sent to local agent {request.client_id}"}
+    else:
+        raise HTTPException(status_code=404, detail="CLI Agent is not connected. Please run `queryforge connect` in your terminal.")
 
 if __name__ == "__main__":
     import uvicorn

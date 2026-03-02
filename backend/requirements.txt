@@ -7,3 +7,4 @@ pytest
 httpx
 tabulate
 groq>=0.4.0
+websockets>=12.0

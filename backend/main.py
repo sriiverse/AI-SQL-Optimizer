@@ -6,9 +6,12 @@ from models import AnalyzeRequest, AnalysisResult, TextToSqlRequest, TextToSqlRe
 from analyze import analyze_query_demo, analyze_query_with_gemini, analyze_pipeline_demo
 from generator import generate_sql_demo, generate_sql_with_gemini, generate_mongodb_demo
 from socket_manager import manager
+from history_storage import history_storage
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+import json
+from datetime import datetime
 
 load_dotenv()
 
@@ -56,17 +59,29 @@ async def health():
     """Lightweight keep-alive endpoint for ping checks."""
     return {"status": "ok"}
 
+@app.get("/ping")
+async def ping():
+    """Endpoint to keep the server awake - can be called by external services"""
+    return {"status": "awake", "timestamp": datetime.now().isoformat()}
+
 @app.post("/analyze", response_model=AnalysisResult)
 async def analyze_query_endpoint(request: AnalyzeRequest):
     try:
         model = get_model()
         if model:
-            return await analyze_query_with_gemini(request.query, request.dialect, model)
+            result = await analyze_query_with_gemini(request.query, request.dialect, model)
         else:
             # Demo/fallback mode: route to MongoDB or SQL analyser
             if request.dialect == "mongodb":
-                return analyze_pipeline_demo(request.query)
-            return analyze_query_demo(request.query)
+                result = analyze_pipeline_demo(request.query)
+            else:
+                result = analyze_query_demo(request.query)
+        
+        # Store in history (in a real app, we would have the optimized result too)
+        # For now, we store the analysis result as-is
+        history_storage.add_entry(result, dialect=request.dialect)
+        
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -90,6 +105,11 @@ class ExecuteRequest(BaseModel):
     client_id: str
     query: str
 
+class ExecutionResult(BaseModel):
+    status: str
+    execution_time_ms: float
+    note: Optional[str] = None
+
 @app.websocket("/ws/agent/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     """
@@ -101,8 +121,46 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             # Wait for responses from the CLI (e.g., the JSON EXPLAIN plan)
             data = await websocket.receive_text()
             print(f"Received from Agent [{client_id}]: {data}")
-            # For this MVP, we just log it. In a complete flow, we would route this 
-            # back to the specific React client waiting for the answer.
+            
+            # Parse the execution result from CLI
+            try:
+                result_data = json.loads(data)
+                if result_data.get("type") == "EXECUTION_RESULT":
+                    # Store execution result in history
+                    # In a real implementation, we would associate this with the original query
+                    # For now, we'll create a mock analysis result for storage
+                    execution_time_ms = result_data.get("execution_time_ms", 0)
+                    from cost_calculator import calculate_execution_cost
+                    # Assume PostgreSQL dialect for cost calculation (would be passed from frontend in reality)
+                    execution_cost = calculate_execution_cost(execution_time_ms, "postgresql")
+                    
+                    # Create a mock AnalysisResult for storage purposes
+                    # In a real implementation, we would store the actual query and results
+                    from models import AnalysisResult, PlanNode, Suggestion
+                    mock_plan = PlanNode(
+                        node_type="EXECUTED",
+                        cost=0.0,
+                        rows=0,
+                        relation_name="executed_query",
+                        execution_time_ms=execution_time_ms,
+                        execution_cost=execution_cost
+                    )
+                    mock_result = AnalysisResult(
+                        original_query="[Query executed via CLI agent]",
+                        execution_plan=mock_plan,
+                        suggestions=[],
+                        explanation="Query executed via local CLI agent"
+                    )
+                    
+                    # Store in history (this would be improved with actual query tracking)
+                    history_storage.add_entry(mock_result, dialect="postgresql")
+                    print(f"Stored execution result in history: {execution_time_ms}ms, cost: ")
+                    
+            except json.JSONDecodeError:
+                print(f"Failed to parse execution result from client {client_id}")
+            except Exception as e:
+                print(f"Error processing execution result: {e}")
+                
     except WebSocketDisconnect:
         manager.disconnect(client_id)
 
@@ -115,7 +173,27 @@ async def execute_via_agent(request: ExecuteRequest):
     if success:
         return {"status": "success", "message": f"Command sent to local agent {request.client_id}"}
     else:
-        raise HTTPException(status_code=404, detail="CLI Agent is not connected. Please run `queryforge connect` in your terminal.")
+        raise HTTPException(status_code=404, detail="CLI Agent is not connected. Please run queryforge connect in your terminal.")
+
+@app.post("/agent/execution-result")
+async def receive_execution_result(client_id: str, result: ExecutionResult):
+    """
+    Receive execution results from the CLI agent and store in history.
+    This endpoint would be called by the CLI agent after executing a query.
+    """
+    # In a real implementation, we would associate this with a specific query
+    # For now, we'll just acknowledge receipt
+    # The frontend would need to store the query separately and associate it with this result
+    print(f"Received execution result from client {client_id}: {result}")
+    return {"status": "success", "message": "Execution result received"}
+
+@app.get("/history")
+async def get_history(limit: int = 50):
+    """
+    Get query history entries
+    """
+    history = history_storage.get_history(limit=limit)
+    return {"history": history}
 
 if __name__ == "__main__":
     import uvicorn

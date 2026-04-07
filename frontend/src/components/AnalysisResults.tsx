@@ -1,5 +1,6 @@
 import { motion } from "framer-motion"
 import { Activity, AlertTriangle, CheckCircle, TrendingUp, Code2 } from "lucide-react"
+import { ExplainTree } from "./ExplainTree"
 
 // Types matching the backend response
 type Suggestion = {
@@ -24,6 +25,9 @@ const impactConfig = {
 }
 
 export function AnalysisResults({ result }: { result: AnalysisResult }) {
+    // Determine dialect from execution plan or default to postgresql
+    const dialect = result.execution_plan?.dialect || "postgresql";
+    
     return (
         <div className="space-y-6">
 
@@ -45,6 +49,29 @@ export function AnalysisResults({ result }: { result: AnalysisResult }) {
                 </div>
                 <p className="text-sm text-gray-300 leading-relaxed">{result.explanation}</p>
             </motion.div>
+
+            {/* ── Execution Plan Visualization ── */}
+            {result.execution_plan && (
+                <motion.div
+                    initial={{ opacity: 0, y: 20, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 24, delay: 0.1 }}
+                    className="p-5 rounded-xl border border-blue-500/25 bg-blue-500/8 shadow-lg"
+                >
+                    <div className="flex items-center gap-2 mb-3 text-blue-400">
+                        <motion.div
+                            animate={{ rotate: [0, 8, -8, 0] }}
+                            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                        >
+                            <Activity className="h-5 w-5" />
+                        </motion.div>
+                        <h3 className="font-semibold text-sm tracking-wide">Execution Plan</h3>
+                    </div>
+                    <div className="space-y-3">
+                        <ExplainTree explain_plan={result.execution_plan} dialect={dialect} />
+                    </div>
+                </motion.div>
+            )}
 
             {/* ── Optimization Suggestions ── */}
             {result.suggestions.length > 0 && (

@@ -104,6 +104,28 @@ This application sends data to **Google's Generative AI API**.
 *   **What is NOT sent:** Database credentials, connection strings, or actual row data (unless you paste row data into the schema box).
 *   **Recommendation:** Use randomized/anonymized table names (e.g., `table_a`) if your schema contains highly sensitive trade secrets.
 
+### History and local agent
+
+Both switches default to off. Only `1`, `true`, `yes`, or `on` enables one. Neither switch is authentication.
+
+*   `HISTORY_ENABLED`: when off, `POST /analyze` does not write history and `GET /history` returns `History is disabled`. Do not enable this on a shared or public server. The store is one SQLite file with no per-user isolation, and turning the flag on does not make that store safe.
+*   `AGENT_ENABLED`: when off, the agent WebSocket and `/agent` routes stay closed. Turning it on only enables the existing agent channel. It does not authenticate clients and does not make that channel safe for a public multi-user deployment. Leave it off until access control exists. The CLI in `cli/index.js` is a simulated timer. It does not connect to a database, run `EXPLAIN`, measure database time, or implement a login command.
+*   The history file is created only when `HISTORY_ENABLED` is on and a request reads or writes history. A disabled `GET /history` does not open the database.
+
+### Request limits
+
+These values are read when the backend process starts. A malformed value stops startup instead of turning the protection off.
+
+*   SQL query: 20,000 characters (`MAX_QUERY_CHARS`)
+*   Schema text: 100,000 characters (`MAX_SCHEMA_CHARS`), including optional analyze `schema_context` and generation `schema_def`
+*   Natural-language question: 4,000 characters (`MAX_QUESTION_CHARS`)
+*   Request body: 262,144 bytes (`MAX_BODY_BYTES`)
+*   Analysis provider deadline: 30 seconds (`ANALYSIS_TIMEOUT_SECONDS`)
+*   Generation provider deadline: 45 seconds (`GENERATION_TIMEOUT_SECONDS`)
+*   `POST /analyze` and `POST /generate-sql` share a limit of 20 requests per direct client IP per 60 seconds (`RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW_SECONDS`). Health checks are not counted. The limiter keeps at most 10,000 IP entries (`RATE_LIMIT_MAX_KEYS`). It lives in process memory, so it is not a shared limit across workers or instances. This deployment has no trusted proxy, and `X-Forwarded-For` is not used.
+
+Supported dialects are `postgresql`, `mysql`, `sqlite`, and `mongodb`.
+
 ---
 
 ## 🏗️ System Architecture

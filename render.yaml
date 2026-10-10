@@ -10,3 +10,6 @@ services:
         value: 3.10.13
       - key: GEMINI_API_KEY
         sync: false
+      # Do not set HISTORY_ENABLED or AGENT_ENABLED on this public service.
+      # Both default to off. Neither flag is authentication. History is one
+      # shared SQLite file, and the agent accepts any client id when enabled.

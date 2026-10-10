@@ -53,15 +53,41 @@ class HistoryStorage:
             optimized_result: AnalysisResult for the optimized query (if available)
             dialect: Database dialect used
         """
-        # Extract costs from execution plans
-        original_cost = result.execution_plan.execution_cost or 0.0
-        optimized_cost = (
-            optimized_result.execution_plan.execution_cost if optimized_result else 0.0
-        )
-        cost_savings = original_cost - optimized_cost
+        if not isinstance(result, AnalysisResult):
+            result = AnalysisResult.model_validate(result)
+        if optimized_result is not None and not isinstance(optimized_result, AnalysisResult):
+            optimized_result = AnalysisResult.model_validate(optimized_result)
 
-        # Extract execution time
-        execution_time_ms = result.execution_plan.execution_time_ms or 0.0
+        # Store a cost only for a synthetic estimate that actually included a
+        # number. Missing costs stay null. This service never measures runtime,
+        # so execution_time_ms stays null and an engine plan is not recorded.
+        if result.plan_origin == "none" or result.analysis_source == "error":
+            original_cost = None
+            optimized_query = None
+        else:
+            optimized_query = result.optimized_query
+            if result.plan_origin == "synthetic" and result.execution_plan.cost is not None:
+                original_cost = result.execution_plan.cost
+            else:
+                original_cost = None
+
+        optimized_cost = None
+        if (
+            optimized_result is not None
+            and optimized_result.plan_origin == "synthetic"
+            and optimized_result.analysis_source != "error"
+            and optimized_result.execution_plan.cost is not None
+        ):
+            optimized_cost = optimized_result.execution_plan.cost
+            if optimized_query is None:
+                optimized_query = optimized_result.optimized_query
+
+        cost_savings = (
+            original_cost - optimized_cost
+            if original_cost is not None and optimized_cost is not None
+            else None
+        )
+        execution_time_ms = None
 
         # Serialize suggestions and optimized query
         suggestions_json = json.dumps(
@@ -76,37 +102,31 @@ class HistoryStorage:
             ]
         )
 
-        optimized_query = (
-            optimized_result.optimized_query
-            if optimized_result and optimized_result.optimized_query
-            else None
-        )
-
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO query_history (
-                query, dialect, original_cost, optimized_cost, cost_savings,
-                execution_time_ms, explanation, suggestions, optimized_query
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                result.original_query,
-                dialect,
-                original_cost,
-                optimized_cost,
-                cost_savings,
-                execution_time_ms,
-                result.explanation,
-                suggestions_json,
-                optimized_query,
-            ),
-        )
-
-        conn.commit()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO query_history (
+                    query, dialect, original_cost, optimized_cost, cost_savings,
+                    execution_time_ms, explanation, suggestions, optimized_query
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    result.original_query,
+                    dialect,
+                    original_cost,
+                    optimized_cost,
+                    cost_savings,
+                    execution_time_ms,
+                    result.explanation,
+                    suggestions_json,
+                    optimized_query,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def get_history(self, limit: int = 50) -> List[Dict]:
         """
@@ -164,5 +184,13 @@ class HistoryStorage:
         conn.close()
 
 
-# Global instance
-history_storage = HistoryStorage()
+# Opened on first history read or write. Importing this module does not create
+# the database file, so a disabled history route never touches SQLite.
+_history_storage: Optional[HistoryStorage] = None
+
+
+def get_history_storage() -> HistoryStorage:
+    global _history_storage
+    if _history_storage is None:
+        _history_storage = HistoryStorage()
+    return _history_storage

@@ -1,20 +1,57 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 from models import AnalyzeRequest, AnalysisResult, TextToSqlRequest, TextToSqlResponse
 from analyze import analyze_query_demo, analyze_query_with_gemini, analyze_pipeline_demo
 from generator import generate_sql_demo, generate_sql_with_gemini, generate_mongodb_demo
 from socket_manager import manager
-from history_storage import history_storage
+from history_storage import get_history_storage
+from body_limit import BodySizeLimitMiddleware
+from rate_limit import RateLimitMiddleware, limiter
+from safety_config import MAX_BODY_BYTES
+import logging
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 import json
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 load_dotenv()
+
+# Process environment and the .env file loaded above are the deployment
+# source. Tests override history_enabled and agent_enabled directly. They do
+# not need to change os.environ after this module has been imported.
+_ENABLED_VALUES = {"1", "true", "yes", "on"}
+
+
+def flag_is_enabled(value: Optional[str]) -> bool:
+    """True only for 1, true, yes, or on. Missing and every other value are false."""
+    if value is None:
+        return False
+    return value.strip().lower() in _ENABLED_VALUES
+
+
+def history_enabled() -> bool:
+    # HISTORY_ENABLED defaults to false.
+    # Do not enable this on a shared or public deployment. History is one
+    # SQLite file with no authentication and no per-user isolation. Setting
+    # this flag does not make that store safe for public use.
+    return flag_is_enabled(os.environ.get("HISTORY_ENABLED"))
+
+
+def agent_enabled() -> bool:
+    # AGENT_ENABLED defaults to false. It only turns on the existing agent
+    # channel. It is not authentication and does not make that channel safe
+    # for a public multi-user deployment.
+    return flag_is_enabled(os.environ.get("AGENT_ENABLED"))
+
 
 # --- Module-level singleton: model is initialized ONCE at startup ---
 _gemini_model = None
@@ -41,10 +78,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI SQL Optimizer", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    # Drop the submitted value. Pydantic otherwise echoes it, including an
+    # oversized query or schema, in the 422 body.
+    detail = jsonable_encoder(
+        [
+            {"type": error.get("type"), "loc": error.get("loc"), "msg": error.get("msg")}
+            for error in exc.errors()
+        ]
+    )
+    return JSONResponse(status_code=422, content={"detail": detail})
+
+
 def get_model():
     """Returns the shared, pre-initialized Gemini model instance."""
     return _gemini_model
 
+
+# Added first so CORS stays outermost. Body size runs before the rate limit,
+# and both run before a route can call a provider.
+app.add_middleware(RateLimitMiddleware, limiter=limiter)
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 
 # Configure CORS for frontend
 app.add_middleware(
@@ -73,28 +128,40 @@ async def ping():
     return {"status": "awake", "timestamp": datetime.now().isoformat()}
 
 
+def _coerce_analysis(result) -> AnalysisResult:
+    if isinstance(result, AnalysisResult):
+        return result
+    return AnalysisResult.model_validate(result)
+
+
 @app.post("/analyze", response_model=AnalysisResult)
 async def analyze_query_endpoint(request: AnalyzeRequest):
     try:
         model = get_model()
         if model:
-            result = await analyze_query_with_gemini(
+            raw_result = await analyze_query_with_gemini(
                 request.query, request.dialect, model
             )
         else:
             # Demo/fallback mode: route to MongoDB or SQL analyser
             if request.dialect == "mongodb":
-                result = analyze_pipeline_demo(request.query)
+                raw_result = analyze_pipeline_demo(request.query)
             else:
-                result = analyze_query_demo(request.query)
+                raw_result = analyze_query_demo(request.query)
+        result = _coerce_analysis(raw_result)
+    except Exception:
+        logger.exception("Analysis failed")
+        raise HTTPException(status_code=500, detail="Analysis failed")
 
-        # Store in history (in a real app, we would have the optimized result too)
-        # For now, we store the analysis result as-is
-        history_storage.add_entry(result, dialect=request.dialect)
+    if history_enabled():
+        try:
+            get_history_storage().add_entry(result, dialect=request.dialect)
+        except Exception:
+            logger.exception(
+                "History persistence failed; returning the completed analysis"
+            )
 
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return result
 
 
 @app.post("/generate-sql", response_model=TextToSqlResponse)
@@ -110,8 +177,9 @@ async def generate_sql_endpoint(request: TextToSqlRequest):
             if request.dialect == "mongodb":
                 return generate_mongodb_demo(request.schema_def, request.question)
             return generate_sql_demo(request.schema_def, request.question)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("SQL generation failed")
+        raise HTTPException(status_code=500, detail="SQL generation failed")
 
 
 # --- WebSockets & CLI Agent Logic ---
@@ -131,12 +199,17 @@ class ExecutionResult(BaseModel):
 @app.websocket("/ws/agent/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     """
-    Endpoint for the local Node.js CLI Agent to connect securely.
+    Local CLI agent socket. The CLI simulates a timer and does not execute SQL.
+    Disabled unless AGENT_ENABLED is true. That flag is not authentication.
     """
+    if not agent_enabled():
+        # Close during CONNECTING. Do not accept the socket or register it.
+        raise WebSocketException(code=1008, reason="Agent is disabled")
+
     await manager.connect(websocket, client_id)
     try:
         while True:
-            # Wait for responses from the CLI (e.g., the JSON EXPLAIN plan)
+            # Messages from the simulated CLI. They are not database plans.
             data = await websocket.receive_text()
             print(f"Received from Agent [{client_id}]: {data}")
 
@@ -144,41 +217,27 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             try:
                 result_data = json.loads(data)
                 if result_data.get("type") == "EXECUTION_RESULT":
-                    # Store execution result in history
-                    # In a real implementation, we would associate this with the original query
-                    # For now, we'll create a mock analysis result for storage
-                    execution_time_ms = result_data.get("execution_time_ms", 0)
-                    from cost_calculator import calculate_execution_cost
+                    # The CLI agent does not run the query against a database.
+                    # Do not record its timer as a measured execution time, and
+                    # do not label this acknowledgement as a model provider.
+                    from models import PlanNode
 
-                    # Assume PostgreSQL dialect for cost calculation (would be passed from frontend in reality)
-                    execution_cost = calculate_execution_cost(
-                        execution_time_ms, "postgresql"
-                    )
-
-                    # Create a mock AnalysisResult for storage purposes
-                    # In a real implementation, we would store the actual query and results
-                    from models import AnalysisResult, PlanNode, Suggestion
-
-                    mock_plan = PlanNode(
-                        node_type="EXECUTED",
-                        cost=0.0,
-                        rows=0,
-                        relation_name="executed_query",
-                        execution_time_ms=execution_time_ms,
-                        execution_cost=execution_cost,
-                    )
+                    mock_plan = PlanNode()
                     mock_result = AnalysisResult(
-                        original_query="[Query executed via CLI agent]",
+                        original_query="[Query received from CLI agent]",
                         execution_plan=mock_plan,
                         suggestions=[],
-                        explanation="Query executed via local CLI agent",
+                        explanation="Query acknowledged via local CLI agent. Performance was not measured.",
+                        plan_origin="none",
+                        database_connected=False,
+                        performance_measured=False,
                     )
 
-                    # Store in history (this would be improved with actual query tracking)
-                    history_storage.add_entry(mock_result, dialect="postgresql")
-                    print(
-                        f"Stored execution result in history: {execution_time_ms}ms, cost: "
-                    )
+                    if history_enabled():
+                        get_history_storage().add_entry(mock_result, dialect="postgresql")
+                        logger.info(
+                            "Stored agent acknowledgement without a measured runtime"
+                        )
 
             except json.JSONDecodeError:
                 print(f"Failed to parse execution result from client {client_id}")
@@ -192,8 +251,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 @app.post("/agent/execute")
 async def execute_via_agent(request: ExecuteRequest):
     """
-    React frontend calls this to trigger execution on the user's laptop.
+    Forward a query to a connected CLI socket when AGENT_ENABLED is true.
+    The CLI does not execute the query. This flag is not authentication.
     """
+    if not agent_enabled():
+        raise HTTPException(status_code=404, detail="Agent is disabled")
+
     success = await manager.send_execute_command(request.client_id, request.query)
     if success:
         return {
@@ -203,19 +266,20 @@ async def execute_via_agent(request: ExecuteRequest):
     else:
         raise HTTPException(
             status_code=404,
-            detail="CLI Agent is not connected. Please run queryforge connect in your terminal.",
+            detail="CLI agent is not connected.",
         )
 
 
 @app.post("/agent/execution-result")
 async def receive_execution_result(client_id: str, result: ExecutionResult):
     """
-    Receive execution results from the CLI agent and store in history.
-    This endpoint would be called by the CLI agent after executing a query.
+    Acknowledge a CLI payload. This route does not execute SQL and does not
+    store a measured runtime. Disabled unless AGENT_ENABLED is true.
     """
-    # In a real implementation, we would associate this with a specific query
-    # For now, we'll just acknowledge receipt
-    # The frontend would need to store the query separately and associate it with this result
+    if not agent_enabled():
+        raise HTTPException(status_code=404, detail="Agent is disabled")
+
+    # The payload is not checked against a database execution. Receipt only.
     print(f"Received execution result from client {client_id}: {result}")
     return {"status": "success", "message": "Execution result received"}
 
@@ -223,9 +287,13 @@ async def receive_execution_result(client_id: str, result: ExecutionResult):
 @app.get("/history")
 async def get_history(limit: int = 50):
     """
-    Get query history entries
+    Return shared history only when HISTORY_ENABLED is true.
+    That flag does not add authentication or per-user isolation.
     """
-    history = history_storage.get_history(limit=limit)
+    if not history_enabled():
+        raise HTTPException(status_code=404, detail="History is disabled")
+
+    history = get_history_storage().get_history(limit=limit)
     return {"history": history}
 
 

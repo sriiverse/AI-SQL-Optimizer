@@ -55,24 +55,24 @@ export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
                         </div>
 
                         <p className="text-gray-300 leading-relaxed mb-8">
-                            Unlock the true power of AI Database Intelligence. To protect your data, our PRO features run entirely on your local machine using our secure CLI Agent.
+                            The CLI in this repository is a simulated agent. It opens a WebSocket and runs a timer. It does not connect to a database or execute SQL.
                         </p>
 
                         <div className="space-y-6">
                             <FeatureRow
                                 icon={<ServerIcon className="w-5 h-5 text-blue-400" />}
-                                title="Direct Localhost Connection"
-                                desc="Connect to localhost:5432 securely without opening ports or exposing data to the internet."
+                                title="No database connection"
+                                desc="The agent does not connect to localhost or any other database, and it does not open a tunnel."
                             />
                             <FeatureRow
                                 icon={<CommandLineIcon className="w-5 h-5 text-pink-400" />}
-                                title="Run True EXPLAIN Plans"
-                                desc="Execute queries locally to get real-world millisecond timings and exact index usage."
+                                title="Simulated timer, not an EXPLAIN plan"
+                                desc="The CLI waits briefly and reports that delay. It does not run EXPLAIN or measure database execution time."
                             />
                             <FeatureRow
                                 icon={<ShieldCheckIcon className="w-5 h-5 text-green-400" />}
-                                title="Zero Data Retention"
-                                desc="Your passwords and production data never leave your laptop. Perfect for enterprise."
+                                title="No database password"
+                                desc="This agent does not accept a database password. Do not paste a connection string into it."
                             />
                         </div>
                     </div>
@@ -105,21 +105,22 @@ export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
                             <div className="p-5 font-mono text-sm space-y-5">
                                 <TerminalCommand
                                     step="1"
-                                    cmd="npm install -g @queryforge/cli"
+                                    cmd="node cli/index.js"
+                                    desc="# Starts the simulated timer agent in this repository"
                                     copiedContent={copiedContent}
                                     onCopy={handleCopy}
                                 />
                                 <TerminalCommand
                                     step="2"
-                                    cmd="queryforge login"
-                                    desc="# Authenticates your local machine"
+                                    cmd="# type a client id when asked"
+                                    desc="# No login command is implemented"
                                     copiedContent={copiedContent}
                                     onCopy={handleCopy}
                                 />
                                 <TerminalCommand
                                     step="3"
-                                    cmd='queryforge connect --db "postgresql://user:pass@localhost:5432/db"'
-                                    desc="# Establishes a secure WebSocket tunnel"
+                                    cmd="# wait for a WebSocket message"
+                                    desc="# The agent does not execute the query or run EXPLAIN"
                                     copiedContent={copiedContent}
                                     onCopy={handleCopy}
                                 />
@@ -133,7 +134,7 @@ export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
                                     <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
                                 </div>
-                                <span className="text-sm font-medium text-purple-300">Waiting for CLI connection...</span>
+                                <span className="text-sm font-medium text-purple-300">This panel does not connect to a database.</span>
                             </div>
                             <Button variant="outline" className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 hover:bg-white/10">
                                 View Docs <ChevronRightIcon className="w-3 h-3 ml-1" />

@@ -1,8 +1,111 @@
-from models import AnalysisResult, PlanNode, Suggestion
-import random
+from typing import Optional
+
+from models import AnalysisResult, PlanNode, Suggestion, reported_provenance
+from provider_timeout import ProviderTimeout, await_provider
+from safety_config import analysis_timeout_seconds
+import logging
+import math
 import os
 import json
 import google.generativeai as genai
+
+logger = logging.getLogger(__name__)
+
+
+def _analysis_error(query: str, explanation: str) -> AnalysisResult:
+    return AnalysisResult(
+        original_query=query,
+        execution_plan=PlanNode(),
+        suggestions=[],
+        optimized_query="ERROR",
+        explanation=explanation,
+        **reported_provenance("error", "none"),
+    )
+
+
+def _optional_text(value) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _optional_float(value) -> Optional[float]:
+    """A finite number supplied by the model. Missing and invalid values stay unset."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _optional_rows(value) -> Optional[int]:
+    """A non-negative integer row count. Missing and invalid values stay unset."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        number = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            number = int(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _plan_node_from_summary(plan_data) -> PlanNode:
+    if not isinstance(plan_data, dict):
+        plan_data = {}
+    return PlanNode(
+        node_type=_optional_text(plan_data.get("node_type")),
+        cost=_optional_float(plan_data.get("cost")),
+        rows=_optional_rows(plan_data.get("rows")),
+        relation_name=_optional_text(plan_data.get("relation_name")),
+    )
+
+
+def _suggestions_from_payload(raw) -> list:
+    if not isinstance(raw, list):
+        return []
+    suggestions = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        impact = _optional_text(item.get("impact"))
+        if impact not in {"High", "Medium", "Low"}:
+            impact = None
+        suggestions.append(
+            Suggestion(
+                title=_optional_text(item.get("title")) or "Optimization note",
+                description=item.get("description") if isinstance(item.get("description"), str) else "",
+                impact=impact,
+                sql_snippet=item.get("sql_snippet") if isinstance(item.get("sql_snippet"), str) else None,
+            )
+        )
+    return suggestions
 
 async def analyze_query_with_gemini(query: str, dialect: str, model: genai.GenerativeModel) -> AnalysisResult:
     """
@@ -67,52 +170,59 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
     """
     
     text = ""
+    source = "gemini"
+    timeout = analysis_timeout_seconds()
     try:
-        # Use async generation to avoid blocking the event loop
-        response = await model.generate_content_async(prompt)
+        # One async Gemini attempt. wait_for is the deadline, and the SDK
+        # timeout asks that same attempt to abort. A timeout is not a quota
+        # error, so it does not start the Groq fallback.
+        response = await await_provider(
+            model.generate_content_async(prompt, request_options={"timeout": timeout}),
+            timeout,
+        )
         text = response.text.strip()
+    except ProviderTimeout:
+        logger.warning("Gemini analysis timed out")
+        return _analysis_error(query, "AI analysis timed out.")
     except Exception as e:
         error_str = str(e).lower()
         if "429" in error_str or "quota" in error_str:
-            print("Gemini Rate Limit Hit. Falling back to Groq Llama-3-70b...")
+            logger.warning("Gemini rate limit hit. Attempting Groq fallback.")
             groq_key = os.environ.get("GROQ_API_KEY")
             if groq_key:
                 try:
                     import groq
-                    client = groq.AsyncGroq(api_key=groq_key)
-                    completion = await client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,
-                        max_tokens=2000
+                    client = groq.AsyncGroq(api_key=groq_key, timeout=timeout)
+                    completion = await await_provider(
+                        client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2,
+                            max_tokens=2000,
+                            timeout=timeout,
+                        ),
+                        timeout,
                     )
                     text = completion.choices[0].message.content.strip()
-                except Exception as groq_err:
-                    print(f"Groq Fallback Error: {groq_err}")
-                    return AnalysisResult(
-                        original_query=query,
-                        execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
-                        suggestions=[],
-                        optimized_query="ERROR",
-                        explanation=f"AI Analysis Failed (Gemini gave 429, Groq fallback also failed): {str(groq_err)}"
+                    source = "groq"
+                except ProviderTimeout:
+                    logger.warning("Groq analysis fallback timed out")
+                    return _analysis_error(query, "AI analysis timed out.")
+                except Exception:
+                    logger.exception("Groq fallback failed after a Gemini quota error")
+                    return _analysis_error(
+                        query,
+                        "AI analysis failed after the fallback provider returned an error.",
                     )
             else:
-                return AnalysisResult(
-                    original_query=query,
-                    execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
-                    suggestions=[],
-                    optimized_query="ERROR",
-                    explanation=f"AI Analysis Failed (Gemini Quota Exceeded, and GROQ_API_KEY not set): {str(e)}"
+                logger.warning("Gemini quota exceeded and GROQ_API_KEY is not set")
+                return _analysis_error(
+                    query,
+                    "AI analysis failed because the primary provider was unavailable and no fallback provider is configured.",
                 )
         else:
-            print(f"Gemini Error: {e}")
-            return AnalysisResult(
-                original_query=query,
-                execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
-                suggestions=[],
-                optimized_query="ERROR",
-                explanation=f"AI Analysis Failed: {str(e)}"
-            )
+            logger.exception("Gemini analysis failed")
+            return _analysis_error(query, "AI analysis failed.")
 
     try:
         # Clean up if model adds markdown formatting
@@ -122,58 +232,38 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
             text = text[3:]
         if text.endswith("```"):
             text = text[:-3]
-            
+
         data = json.loads(text.strip())
-        
-        plan_data = data.get("execution_plan_summary", {})
-        root_node = PlanNode(
-            node_type=plan_data.get("node_type", "Unknown Scan"),
-            cost=float(plan_data.get("cost", 100.0)),
-            rows=int(plan_data.get("rows", 0)),
-            relation_name=plan_data.get("relation_name", "unknown")
-        )
-        
-        suggestions_data = data.get("suggestions", [])
-        suggestions = [
-            Suggestion(
-                title=s.get("title", "Optimization Tip"),
-                description=s.get("description", ""),
-                impact=s.get("impact", "Medium"),
-                sql_snippet=s.get("sql_snippet", "")
-            ) for s in suggestions_data
-        ]
-        
+        if not isinstance(data, dict):
+            raise ValueError("model response was not an object")
+
+        optimized_query = data.get("optimized_query")
+        if not isinstance(optimized_query, str) or not optimized_query.strip():
+            optimized_query = query
+        explanation = data.get("explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            explanation = "The model did not provide an explanation."
+
+        # A parsed model reply is an estimate. It is never an engine plan,
+        # even when cost or row count is absent.
         return AnalysisResult(
             original_query=query,
-            execution_plan=root_node,
-            suggestions=suggestions,
-            optimized_query=data.get("optimized_query", query),
-            explanation=data.get("explanation", "Analysis complete.")
+            execution_plan=_plan_node_from_summary(data.get("execution_plan_summary")),
+            suggestions=_suggestions_from_payload(data.get("suggestions")),
+            optimized_query=optimized_query,
+            explanation=explanation,
+            **reported_provenance(source, "synthetic"),
         )
         
-    except Exception as parse_e:
-        print(f"Parsing response error: {parse_e}")
-        return AnalysisResult(
-            original_query=query,
-            execution_plan=PlanNode(node_type="ERROR", cost=0, rows=0, relation_name="error"),
-            suggestions=[],
-            optimized_query="ERROR",
-            explanation=f"Error parsing AI response: {str(parse_e)}"
-        )
+    except Exception:
+        logger.exception("Failed to parse analysis response")
+        return _analysis_error(query, "The model response could not be read.")
 
 def analyze_query_demo(query: str) -> AnalysisResult:
-    """
-    Simulates a PostgreSQL EXPLAIN ANALYZE result and AI optimization suggestions.
-    This allows the portfolio project to be demonstrated without a live DB connection or API key.
-    """
+    """Keyword notes for a demo. This does not produce a database plan or metrics."""
     query_lower = query.lower()
-    
-    root_node = PlanNode(
-        node_type="Seq Scan" if "where" not in query_lower or "select *" in query_lower else "Index Scan",
-        cost=1250.0 if "select *" in query_lower else 45.0,
-        rows=10000 if "select *" in query_lower else 50,
-        relation_name="users" if "users" in query_lower else "unknown_table",
-    )
+
+    root_node = PlanNode()
     
     suggestions = []
     
@@ -203,9 +293,8 @@ def analyze_query_demo(query: str) -> AnalysisResult:
 
     if not suggestions:
         suggestions.append(Suggestion(
-            title="Query looks efficient",
-            description="The execution plan uses indexes effectively. Consider caching if QPS is high.",
-            impact="Low"
+            title="No keyword patterns matched",
+            description="This demo only checks a few query keywords. It did not inspect an execution plan or measure performance.",
         ))
 
     return AnalysisResult(
@@ -213,7 +302,8 @@ def analyze_query_demo(query: str) -> AnalysisResult:
         execution_plan=root_node,
         suggestions=suggestions,
         optimized_query=query.replace("*", "id, name, email") if "select *" in query_lower else query,
-        explanation="The query uses a Sequential Scan which is slow on large datasets. Optimization suggests targeting specific columns and adding indexes."
+        explanation="Demo keyword check only. No database was contacted, and no cost, row count, or execution time was measured.",
+        **reported_provenance("demo", "synthetic"),
     )
 
 
@@ -235,36 +325,12 @@ def analyze_pipeline_demo(query: str) -> AnalysisResult:
     has_project = "$project" in q
     has_index   = "hint" in q or "$indexstats" in q
 
-    # Determine primary scan type
-    if not has_match:
-        node_type = "COLLSCAN"
-        cost = 8500.0
-        rows = 100000
-    elif has_lookup:
-        node_type = "$lookup + IXSCAN"
-        cost = 420.0
-        rows = 1500
-    else:
-        node_type = "IXSCAN"
-        cost = 45.0
-        rows = 80
-
-    # Guess collection name
-    import re
-    coll_match = re.search(r'db\.([\w]+)\.', query)
-    collection = coll_match.group(1) if coll_match else "unknown_collection"
-
-    root_node = PlanNode(
-        node_type=node_type,
-        cost=cost,
-        rows=rows,
-        relation_name=collection
-    )
+    root_node = PlanNode()
 
     if not has_match:
         suggestions.append(Suggestion(
             title="Missing $match Stage (Full Collection Scan)",
-            description="Your pipeline has no $match stage before $group or $sort. MongoDB will perform a full COLLSCAN on every document in the collection before aggregating, which is extremely expensive on large collections.",
+            description="This demo found no $match before later stages. It did not run the pipeline or measure a collection scan.",
             impact="High",
             sql_snippet='{ $match: { status: "active", created_at: { $gte: new Date(Date.now() - 30*24*60*60*1000) } } }'
         ))
@@ -303,19 +369,19 @@ def analyze_pipeline_demo(query: str) -> AnalysisResult:
 
     if not suggestions:
         suggestions.append(Suggestion(
-            title="Pipeline looks well-structured",
-            description="The pipeline uses $match early to filter documents and indexes appear to be in use. Consider adding .explain('executionStats') in your MongoDB shell to verify IXSCAN usage.",
-            impact="Low"
+            title="No keyword patterns matched",
+            description="This demo only checks a few pipeline keywords. It did not inspect an execution plan or measure performance.",
         ))
 
     optimized = query
-    if not has_match:
-        optimized = 'db.' + collection + '''.aggregate([\n  { $match: { /* add your filter here */ } },\n''' + query.split('.aggregate([', 1)[-1] if '.aggregate(' in query else query
+    if not has_match and ".aggregate(" in query:
+        optimized = query
 
     return AnalysisResult(
         original_query=query,
         execution_plan=root_node,
         suggestions=suggestions,
         optimized_query=optimized,
-        explanation=f"The pipeline starts with a {node_type} on '{collection}'. {'Moving $match before $group and $lookup stages will dramatically reduce intermediate document counts and enable index usage.' if not has_match else 'Consider adding index hints and projecting only required fields after $group stages.'}"
+        explanation="Demo keyword check only. No database was contacted, and no cost, row count, or execution time was measured.",
+        **reported_provenance("demo", "synthetic"),
     )

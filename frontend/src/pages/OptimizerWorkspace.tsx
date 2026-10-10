@@ -12,9 +12,9 @@ interface OptimizerWorkspaceProps {
 }
 
 const OPTIMIZER_STEPS = [
-    { icon: "🔍", text: "Parsing your query structure..." },
-    { icon: "🔗", text: "Identifying join patterns and index candidates..." },
-    { icon: "📊", text: "Running cost estimation on execution paths..." },
+    { icon: "🔍", text: "Reading the query text..." },
+    { icon: "🔗", text: "Looking for a few common query patterns..." },
+    { icon: "📊", text: "Requesting an estimated review. Database execution is not measured..." },
     { icon: "⚡", text: "Cross-referencing optimization strategies..." },
     { icon: "🛠️", text: "Crafting your personalized recommendations..." },
     { icon: "✨", text: "Please have patience — we're making sure your wait is worth it." },
@@ -25,7 +25,7 @@ const GENERATOR_STEPS = [
     { icon: "🧠", text: "Understanding the natural language intent..." },
     { icon: "🔗", text: "Mapping relationships between tables..." },
     { icon: "⚙️", text: "Constructing optimal query logic..." },
-    { icon: "🧪", text: "Validating syntax for your target dialect..." },
+    { icon: "🧪", text: "Drafting a query. Syntax is not checked against a database..." },
     { icon: "✨", text: "Almost done — making sure your wait is worth it." },
 ]
 
@@ -40,7 +40,7 @@ const MONGODB_STEPS = [
     { icon: "🍃", text: "Parsing your collection schema..." },
     { icon: "🔗", text: "Analyzing document relationships and references..." },
     { icon: "📊", text: "Evaluating aggregation pipeline stages..." },
-    { icon: "⚡", text: "Checking index coverage for query fields..." },
+    { icon: "⚡", text: "Noting index-related keywords. Index use is not measured..." },
     { icon: "🛠️", text: "Optimizing pipeline for performance..." },
     { icon: "✨", text: "Please have patience — we're making sure your wait is worth it." },
 ]
@@ -69,6 +69,90 @@ const slideRight = (delay = 0) => ({
     transition: { type: "spring" as const, stiffness: 300, damping: 24, delay },
 })
 
+function formatAnalysisSource(source: unknown): string {
+    switch (source) {
+        case "gemini":
+            return "Gemini"
+        case "groq":
+            return "Groq"
+        case "demo":
+            return "Demo"
+        case "error":
+            return "Error"
+        default:
+            return "Unknown source"
+    }
+}
+
+function messageFromErrorBody(data: unknown, status: number): string {
+    if (data && typeof data === "object" && "detail" in data) {
+        const detail = (data as { detail?: unknown }).detail
+        if (typeof detail === "string" && detail.trim()) return detail
+    }
+    return `Request failed (${status}).`
+}
+
+async function postJson(url: string, body: unknown): Promise<{ ok: true; data: unknown } | { ok: false; message: string }> {
+    let response: Response
+    try {
+        response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        })
+    } catch (err) {
+        console.error(err)
+        return { ok: false, message: "Could not reach the server. Check your connection and try again." }
+    }
+
+    const raw = await response.text()
+    let data: unknown = null
+    if (raw) {
+        try {
+            data = JSON.parse(raw)
+        } catch {
+            return {
+                ok: false,
+                message: response.ok
+                    ? "The server returned a response that was not valid JSON."
+                    : `Request failed (${response.status}).`,
+            }
+        }
+    }
+
+    if (!response.ok) {
+        return { ok: false, message: messageFromErrorBody(data, response.status) }
+    }
+    return { ok: true, data }
+}
+
+function isAnalysisPayload(data: unknown): data is {
+    original_query: string
+    explanation: string
+    suggestions: unknown[]
+    execution_plan: object
+    analysis_source?: string | null
+    plan_origin?: string | null
+} {
+    if (!data || typeof data !== "object") return false
+    const row = data as Record<string, unknown>
+    return typeof row.original_query === "string"
+        && typeof row.explanation === "string"
+        && Array.isArray(row.suggestions)
+        && !!row.execution_plan
+        && typeof row.execution_plan === "object"
+}
+
+function isGenerationPayload(data: unknown): data is {
+    query: string
+    explanation: string
+    analysis_source?: string | null
+} {
+    if (!data || typeof data !== "object") return false
+    const row = data as Record<string, unknown>
+    return typeof row.query === "string" && typeof row.explanation === "string"
+}
+
 export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     const navigate = useNavigate()
     const outputRef = useRef<HTMLDivElement>(null)
@@ -90,6 +174,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     const [generatorResult, setGeneratorResult] = useState<any>(null)
 
     const [loading, setLoading] = useState(false)
+    const [requestError, setRequestError] = useState<string | null>(null)
 
     const scrollToOutput = () => {
         setTimeout(() => {
@@ -100,17 +185,26 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     const handleAnalyze = async () => {
         setLoading(true)
         setAnalysisResult(null)
+        setRequestError(null)
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/analyze`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query: sqlQuery, dialect })
+            const result = await postJson(`${import.meta.env.VITE_API_BASE_URL}/analyze`, {
+                query: sqlQuery,
+                dialect,
             })
-            const data = await res.json()
-            setAnalysisResult(data)
+            if (!result.ok) {
+                setRequestError(result.message)
+                return
+            }
+            if (!isAnalysisPayload(result.data)) {
+                setRequestError("The analysis response was incomplete.")
+                return
+            }
+            if (result.data.analysis_source === "error") {
+                setRequestError(result.data.explanation || "Analysis failed.")
+                return
+            }
+            setAnalysisResult(result.data)
             scrollToOutput()
-        } catch (err) {
-            console.error(err)
         } finally {
             setLoading(false)
         }
@@ -119,23 +213,34 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     const handleGenerate = async () => {
         setLoading(true)
         setGeneratorResult(null)
+        setRequestError(null)
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/generate-sql`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ schema_def: schemaInput, question: questionInput, dialect })
+            const result = await postJson(`${import.meta.env.VITE_API_BASE_URL}/generate-sql`, {
+                schema_def: schemaInput,
+                question: questionInput,
+                dialect,
             })
-            const data = await res.json()
-            setGeneratorResult(data)
+            if (!result.ok) {
+                setRequestError(result.message)
+                return
+            }
+            if (!isGenerationPayload(result.data)) {
+                setRequestError("The generation response was incomplete.")
+                return
+            }
+            if (result.data.analysis_source === "error") {
+                setRequestError(result.data.explanation || "SQL generation failed.")
+                return
+            }
+            setGeneratorResult(result.data)
             scrollToOutput()
-        } catch (err) {
-            console.error(err)
         } finally {
             setLoading(false)
         }
     }
 
     const hasResult = mode === "optimizer" ? !!analysisResult : !!generatorResult
+    const activeSource = mode === "optimizer" ? analysisResult?.analysis_source : generatorResult?.analysis_source
 
     return (
         <div className="relative min-h-screen flex flex-col bg-[#030014] text-white selection:bg-purple-500/30 font-sans">
@@ -269,10 +374,10 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                     {loading ? (
                                         <div className="flex items-center gap-3">
                                             <div className="h-4 w-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                                            <span>Analyzing Engine...</span>
+                                            <span>Reviewing...</span>
                                         </div>
                                     ) : (
-                                        <><Play className="mr-2 h-5 w-5 fill-white" /> Analyze Execution Plan</>
+                                        <><Play className="mr-2 h-5 w-5 fill-white" /> Review query</>
                                     )}
                                 </Button>
                             </motion.div>
@@ -357,7 +462,16 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                             <LoadingPanel mode={mode} isMongo={isMongo} />
                         )}
 
-                        {!loading && hasResult && (
+                        {!loading && requestError && (
+                            <div
+                                role="alert"
+                                className="bg-red-500/10 border border-red-500/30 rounded-2xl px-6 py-5 text-sm text-red-200"
+                            >
+                                {requestError}
+                            </div>
+                        )}
+
+                        {!loading && !requestError && hasResult && (
                             <div
                                 ref={outputRef}
                                 className="bg-[#0a0a0f]/70 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl ring-1 ring-white/5 overflow-hidden"
@@ -374,7 +488,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                             {mode === "optimizer" ? "Analysis Report" : "Generated Output"}
                                         </h2>
                                     </div>
-                                    <span className="text-[10px] text-gray-600 font-mono">Gemini AI · {new Date().toLocaleTimeString()}</span>
+                                    <span className="text-[10px] text-gray-600 font-mono">{formatAnalysisSource(activeSource)} · {new Date().toLocaleTimeString()}</span>
                                 </div>
 
                                 {/* Scrollable results */}
@@ -385,7 +499,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                             </div>
                         )}
 
-                        {!loading && !hasResult && (
+                        {!loading && !requestError && !hasResult && (
                             <motion.div
                                 key="empty"
                                 {...springIn(0.3)}
@@ -495,7 +609,7 @@ function LoadingPanel({ mode, isMongo }: { mode: "optimizer" | "generator"; isMo
                     </motion.p>
                 </AnimatePresence>
                 <p className="text-[11px] text-gray-600 font-mono tracking-wide animate-pulse">
-                    Powered by Gemini AI
+                    Waiting for a result
                 </p>
             </div>
 

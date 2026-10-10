@@ -6,16 +6,44 @@ import { ExplainTree } from "./ExplainTree"
 type Suggestion = {
     title: string
     description: string
-    impact: "High" | "Medium" | "Low"
+    impact?: "High" | "Medium" | "Low"
     sql_snippet?: string
 }
 
 type AnalysisResult = {
     original_query: string
     explanation: string
-    suggestions: Suggestion[]
+    suggestions?: Suggestion[]
     execution_plan: any
     optimized_query?: string
+    analysis_source?: string | null
+    plan_origin?: string | null
+    performance_measured?: boolean
+}
+
+function planPresentation(result: AnalysisResult): { title: string; note?: string } {
+    const measuredNote = result.performance_measured === true ? undefined : "Performance was not measured."
+    if (result.plan_origin === "engine") {
+        return { title: "Database execution plan", note: measuredNote }
+    }
+    if (result.plan_origin === "synthetic") {
+        const measured = result.performance_measured === true
+            ? ""
+            : " Performance was not measured."
+        const costMissing = result.execution_plan?.cost == null
+        const rowsMissing = result.execution_plan?.rows == null
+        const missing = costMissing || rowsMissing
+            ? " A missing cost or row count was not supplied."
+            : ""
+        return {
+            title: "Estimated plan",
+            note: `Synthetic estimate. This is not a plan from a database engine.${measured}${missing}`,
+        }
+    }
+    if (result.plan_origin === "none") {
+        return { title: "No execution plan", note: "No database execution plan was produced." }
+    }
+    return { title: "Plan", note: "Plan origin was not reported." }
 }
 
 const impactConfig = {
@@ -27,6 +55,8 @@ const impactConfig = {
 export function AnalysisResults({ result }: { result: AnalysisResult }) {
     // Determine dialect from execution plan or default to postgresql
     const dialect = result.execution_plan?.dialect || "postgresql";
+    const suggestions = result.suggestions ?? []
+    const planCopy = planPresentation(result)
     
     return (
         <div className="space-y-6">
@@ -65,8 +95,17 @@ export function AnalysisResults({ result }: { result: AnalysisResult }) {
                         >
                             <Activity className="h-5 w-5" />
                         </motion.div>
-                        <h3 className="font-semibold text-sm tracking-wide">Execution Plan</h3>
+                        <h3 className="font-semibold text-sm tracking-wide">{planCopy.title}</h3>
                     </div>
+                    {planCopy.note && (
+                        <p className="text-xs text-gray-400 mb-3 leading-relaxed">{planCopy.note}</p>
+                    )}
+                    {result.execution_plan?.cost == null && (
+                        <p className="text-xs text-gray-400 mb-2">Cost was not provided.</p>
+                    )}
+                    {result.execution_plan?.rows == null && (
+                        <p className="text-xs text-gray-400 mb-2">Row count was not provided.</p>
+                    )}
                     <div className="space-y-3">
                         <ExplainTree explain_plan={result.execution_plan} dialect={dialect} />
                     </div>
@@ -74,13 +113,19 @@ export function AnalysisResults({ result }: { result: AnalysisResult }) {
             )}
 
             {/* ── Optimization Suggestions ── */}
-            {result.suggestions.length > 0 && (
+            {suggestions.length > 0 && (
                 <div className="space-y-3">
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest px-1">
                         Optimization Suggestions
                     </h3>
-                    {result.suggestions.map((sugg, idx) => {
-                        const cfg = impactConfig[sugg.impact] ?? impactConfig.Low
+                    {suggestions.map((sugg, idx) => {
+                        const rated = sugg.impact ? impactConfig[sugg.impact] : undefined
+                        const cfg = rated ?? {
+                            border: "border-white/10",
+                            bg: "bg-white/5",
+                            badge: "border-white/15 text-gray-400",
+                            icon: <Activity className="h-4 w-4 text-gray-400" />,
+                        }
                         return (
                             <motion.div
                                 key={idx}
@@ -101,7 +146,7 @@ export function AnalysisResults({ result }: { result: AnalysisResult }) {
                                         {sugg.title}
                                     </h4>
                                     <span className={`flex-shrink-0 text-[10px] px-2.5 py-1 rounded-full border font-medium ${cfg.badge}`}>
-                                        {sugg.impact} Impact
+                                        {sugg.impact ? `${sugg.impact} · model-rated` : "Unrated"}
                                     </span>
                                 </div>
                                 <p className="text-xs text-gray-400 mb-3 leading-relaxed">{sugg.description}</p>
@@ -126,11 +171,11 @@ export function AnalysisResults({ result }: { result: AnalysisResult }) {
             )}
 
             {/* ── Optimized Query ── */}
-            {result.optimized_query && result.optimized_query !== result.original_query && (
+            {result.analysis_source !== "error" && result.optimized_query && result.optimized_query !== "ERROR" && result.optimized_query !== result.original_query && (
                 <motion.div
                     initial={{ opacity: 0, y: 20, scale: 0.97 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    transition={{ type: "spring", stiffness: 260, damping: 22, delay: (result.suggestions.length * 0.07) + 0.1 }}
+                    transition={{ type: "spring", stiffness: 260, damping: 22, delay: (suggestions.length * 0.07) + 0.1 }}
                     className="p-5 rounded-xl border border-green-500/25 bg-green-500/6 shadow-lg"
                 >
                     <div className="flex items-center gap-2 mb-3">
@@ -140,7 +185,7 @@ export function AnalysisResults({ result }: { result: AnalysisResult }) {
                         >
                             <CheckCircle className="h-5 w-5 text-green-400" />
                         </motion.div>
-                        <h3 className="text-sm font-semibold text-green-400 tracking-wide">Recommended Query</h3>
+                        <h3 className="text-sm font-semibold text-green-400 tracking-wide">Suggested query</h3>
                     </div>
                     <div className="bg-black/60 rounded-xl border border-white/10 overflow-x-auto">
                         <pre className="text-xs font-mono text-gray-300 p-4 whitespace-pre-wrap leading-relaxed">

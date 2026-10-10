@@ -1,7 +1,20 @@
-from models import TextToSqlResponse
+from models import TextToSqlResponse, reported_provenance
+from provider_timeout import ProviderTimeout, await_provider
+from safety_config import generation_timeout_seconds
+import logging
 import os
 import re
 import google.generativeai as genai
+
+logger = logging.getLogger(__name__)
+
+
+def _generation_error(explanation: str) -> TextToSqlResponse:
+    return TextToSqlResponse(
+        query="ERROR",
+        explanation=explanation,
+        **reported_provenance("error", "none"),
+    )
 
 async def generate_sql_with_gemini(schema: str, question: str, dialect: str, model: genai.GenerativeModel) -> TextToSqlResponse:
     """
@@ -251,42 +264,55 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
 """
 
     text = ""
+    source = "gemini"
+    timeout = generation_timeout_seconds()
     try:
-        response = await model.generate_content_async(prompt)
+        # One async Gemini attempt. A timeout does not start the Groq fallback.
+        response = await await_provider(
+            model.generate_content_async(prompt, request_options={"timeout": timeout}),
+            timeout,
+        )
         text = response.text.strip()
+    except ProviderTimeout:
+        logger.warning("Gemini generation timed out")
+        return _generation_error("AI generation timed out.")
     except Exception as e:
         error_str = str(e).lower()
         if "429" in error_str or "quota" in error_str:
-            print("Gemini Rate Limit Hit. Falling back to Groq Llama-3-70b...")
+            logger.warning("Gemini rate limit hit. Attempting Groq fallback.")
             groq_key = os.environ.get("GROQ_API_KEY")
             if groq_key:
                 try:
                     import groq
-                    client = groq.AsyncGroq(api_key=groq_key)
-                    completion = await client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,
-                        max_tokens=3000
+                    client = groq.AsyncGroq(api_key=groq_key, timeout=timeout)
+                    completion = await await_provider(
+                        client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2,
+                            max_tokens=3000,
+                            timeout=timeout,
+                        ),
+                        timeout,
                     )
                     text = completion.choices[0].message.content.strip()
-                except Exception as groq_err:
-                    print(f"Groq Fallback Error: {groq_err}")
-                    return TextToSqlResponse(
-                        query="ERROR",
-                        explanation=f"AI Generation Failed (Gemini gave 429, Groq fallback also failed): {str(groq_err)}"
+                    source = "groq"
+                except ProviderTimeout:
+                    logger.warning("Groq generation fallback timed out")
+                    return _generation_error("AI generation timed out.")
+                except Exception:
+                    logger.exception("Groq fallback failed after a Gemini quota error")
+                    return _generation_error(
+                        "AI generation failed after the fallback provider returned an error."
                     )
             else:
-                return TextToSqlResponse(
-                    query="ERROR",
-                    explanation=f"AI Generation Failed (Gemini Quota Exceeded, and GROQ_API_KEY not set): {str(e)}"
+                logger.warning("Gemini quota exceeded and GROQ_API_KEY is not set")
+                return _generation_error(
+                    "AI generation failed because the primary provider was unavailable and no fallback provider is configured."
                 )
         else:
-            print(f"Gemini Error: {e}")
-            return TextToSqlResponse(
-                query="ERROR",
-                explanation=f"AI Generation Failed: {str(e)}"
-            )
+            logger.exception("Gemini generation failed")
+            return _generation_error("AI generation failed.")
 
     try:
         query_part = ""
@@ -345,15 +371,13 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
 
         return TextToSqlResponse(
             query=query_part,
-            explanation=explanation
+            explanation=explanation,
+            **reported_provenance(source, "none"),
         )
 
-    except Exception as parse_e:
-        print(f"Parsing response error: {parse_e}")
-        return TextToSqlResponse(
-            query="ERROR",
-            explanation=f"Error parsing AI response: {str(parse_e)}"
-        )
+    except Exception:
+        logger.exception("Failed to parse generation response")
+        return _generation_error("The model response could not be read.")
 
 
 def validate_mongodb_query(query: str) -> list[str]:
@@ -602,7 +626,11 @@ ORDER BY avg_latency ASC;"""
         generated_sql = f"SELECT * FROM {table} LIMIT 100;"
         explanation = f"[Demo Mode — AI unavailable] Basic query against '{table}'. Provide your schema and question to get an AI-generated query."
 
-    return TextToSqlResponse(query=generated_sql.strip(), explanation=explanation)
+    return TextToSqlResponse(
+        query=generated_sql.strip(),
+        explanation=explanation,
+        **reported_provenance("demo", "none"),
+    )
 
 
 def generate_mongodb_demo(schema: str, question: str) -> TextToSqlResponse:
@@ -686,4 +714,8 @@ def generate_mongodb_demo(schema: str, question: str) -> TextToSqlResponse:
 ])'''
         explanation = f"[Demo Mode — AI unavailable] Basic query on '{collection}'. Provide your full schema and question to receive an AI-generated pipeline."
 
-    return TextToSqlResponse(query=pipeline.strip(), explanation=explanation)
+    return TextToSqlResponse(
+        query=pipeline.strip(),
+        explanation=explanation,
+        **reported_provenance("demo", "none"),
+    )

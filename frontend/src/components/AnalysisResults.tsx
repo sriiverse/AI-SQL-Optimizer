@@ -10,11 +10,21 @@ type Suggestion = {
     sql_snippet?: string
 }
 
-type AnalysisResult = {
+export type ExecutionPlan = {
+    node_type?: string | null
+    cost?: number | null
+    rows?: number | null
+    relation_name?: string | null
+    dialect?: string
+    children?: ExecutionPlan[]
+    [key: string]: unknown
+}
+
+export type AnalysisResult = {
     original_query: string
     explanation: string
     suggestions?: Suggestion[]
-    execution_plan: any
+    execution_plan: ExecutionPlan
     optimized_query?: string
     analysis_source?: string | null
     plan_origin?: string | null

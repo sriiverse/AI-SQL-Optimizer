@@ -1,3 +1,7 @@
+# Set VITE_API_BASE_URL in the Netlify site environment before building.
+# Value: the public Render origin only, such as https://your-service.onrender.com
+# This file does not name that host. Do not add provider keys or
+# PROVIDER_ACCESS_TOKEN to the frontend build.
 [build]
   command = "npm run build"
   publish = "dist"

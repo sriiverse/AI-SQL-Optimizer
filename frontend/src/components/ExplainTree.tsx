@@ -8,8 +8,12 @@ interface ExplainTreeNode {
 }
 
 interface ExplainTreeProps {
-  explain_plan: any
+  explain_plan: unknown
   dialect: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 export function ExplainTree({ explain_plan, dialect }: ExplainTreeProps) {
@@ -38,34 +42,45 @@ export function ExplainTree({ explain_plan, dialect }: ExplainTreeProps) {
   )
 }
 
-function convertSqliteToTree(flatNodes: any[]): ExplainTreeNode | null {
+function planId(value: unknown): string | number | null {
+  return typeof value === "string" || typeof value === "number" ? value : null
+}
+
+function convertSqliteToTree(flatNodes: unknown): ExplainTreeNode | null {
   if (!Array.isArray(flatNodes) || flatNodes.length === 0) return null
 
   // Create a map of id to node
   const nodeMap: Map<string | number, ExplainTreeNode> = new Map()
+  const rows: { id: string | number; parent: unknown }[] = []
 
   // First pass: create all nodes
-  flatNodes.forEach((node: any) => {
+  flatNodes.forEach((item: unknown) => {
+    if (!isRecord(item)) return
+    const id = planId(item.id)
+    if (id === null) return
+    const detail = typeof item.detail === "string" ? item.detail : ""
     const treeNode: ExplainTreeNode = {
-      id: node.id,
-      name: extractNameFromDetail(node.detail),
-      detail: node.detail,
+      id,
+      name: extractNameFromDetail(detail),
+      detail,
       children: []
     }
-    nodeMap.set(node.id, treeNode)
+    nodeMap.set(id, treeNode)
+    rows.push({ id, parent: item.parent })
   })
 
   // Second pass: assign children
   let root: ExplainTreeNode | null = null
-  flatNodes.forEach((node: any) => {
+  rows.forEach((node) => {
     const treeNode = nodeMap.get(node.id)
     if (!treeNode) return
+    const parent = planId(node.parent)
 
-    if (node.parent === 0 || !nodeMap.has(node.parent)) {
+    if (parent === null || parent === 0 || !nodeMap.has(parent)) {
       // This is a root node
       root = treeNode
     } else {
-      const parentNode = nodeMap.get(node.parent)
+      const parentNode = nodeMap.get(parent)
       if (parentNode) {
         parentNode.children.push(treeNode)
       }
@@ -73,40 +88,44 @@ function convertSqliteToTree(flatNodes: any[]): ExplainTreeNode | null {
   })
 
   // If we didn't find a root, return the first node as fallback
-  if (!root && flatNodes.length > 0) {
-    return nodeMap.get(flatNodes[0].id) || null
+  if (!root && rows.length > 0) {
+    return nodeMap.get(rows[0].id) || null
   }
 
   return root
 }
 
-function convertPostgreSQLToTree(plan: any): ExplainTreeNode | null {
-  if (!plan) return null
+function convertPostgreSQLToTree(plan: unknown): ExplainTreeNode | null {
+  if (!isRecord(plan)) return null
 
-  const buildNode = (p: any): ExplainTreeNode => {
-    const nodeType = p['Node Type'] || p.node_type || 'Unknown'
-    const alias = p.Alias ? ` (${p.Alias})` : ''
+  const buildNode = (p: Record<string, unknown>): ExplainTreeNode => {
+    const labeledType = p['Node Type']
+    const summaryType = p.node_type
+    const nodeType = (typeof labeledType === "string" && labeledType)
+      || (typeof summaryType === "string" && summaryType)
+      || 'Unknown'
+    const alias = typeof p.Alias === "string" && p.Alias ? ` (${p.Alias})` : ''
     const name = `${nodeType}${alias}`
 
     let detail = ''
     if (p['Startup Cost'] !== undefined && p['Total Cost'] !== undefined) {
-      detail += `Cost: ${p['Startup Cost']}..${p['Total Cost']}`
+      detail += `Cost: ${String(p['Startup Cost'])}..${String(p['Total Cost'])}`
     }
     if (p['Plan Rows'] !== undefined) {
-      detail += `, Rows: ${p['Plan Rows']}`
+      detail += `, Rows: ${String(p['Plan Rows'])}`
     }
     if (p['Plan Width'] !== undefined) {
-      detail += `, Width: ${p['Plan Width']}`
+      detail += `, Width: ${String(p['Plan Width'])}`
     }
-    if (p['Filter']) {
+    if (typeof p['Filter'] === "string" && p['Filter']) {
       detail += `, Filter: ${p['Filter']}`
     }
 
     const children: ExplainTreeNode[] = []
-    if (p.Plans && Array.isArray(p.Plans)) {
-      p.Plans.forEach((subplan: any) => {
-        const child = buildNode(subplan)
-        if (child) children.push(child)
+    if (Array.isArray(p.Plans)) {
+      p.Plans.forEach((subplan: unknown) => {
+        if (!isRecord(subplan)) return
+        children.push(buildNode(subplan))
       })
     }
 
@@ -125,7 +144,7 @@ function extractNameFromDetail(detail: string): string {
   // Extract the main operation from the detail string
   // Example: "Seq Scan on users  (cost=0.00..1.10 rows=100 width=4)"
   // We want: "Seq Scan on users"
-  const match = detail.match(/^([^\(]+)/)
+  const match = detail.match(/^([^(]+)/)
   if (match) {
     return match[1].trim()
   }

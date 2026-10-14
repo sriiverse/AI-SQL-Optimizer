@@ -1,11 +1,18 @@
 import { useState, useRef, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "../components/ui/button"
-import { AnalysisResults } from "../components/AnalysisResults"
+import { AnalysisResults, type AnalysisResult } from "../components/AnalysisResults"
 import { GeneratorResults } from "../components/GeneratorResults"
 import { ArrowLeft, Play, Wand2, Database, Sparkles, ShieldAlert, Star } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { ProConnectionModal } from "../components/ProConnectionModal"
+import { apiUrl, resolveApiBaseUrl } from "../lib/apiBase"
+
+const MISSING_API_BASE = "API address is not configured. Set VITE_API_BASE_URL for this build."
+
+function configuredApiBase(): string | null {
+    return resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL, import.meta.env.MODE)
+}
 
 interface OptimizerWorkspaceProps {
     mode: "optimizer" | "generator"
@@ -15,8 +22,8 @@ const OPTIMIZER_STEPS = [
     { icon: "🔍", text: "Reading the query text..." },
     { icon: "🔗", text: "Looking for a few common query patterns..." },
     { icon: "📊", text: "Requesting an estimated review. Database execution is not measured..." },
-    { icon: "⚡", text: "Cross-referencing optimization strategies..." },
-    { icon: "🛠️", text: "Crafting your personalized recommendations..." },
+    { icon: "⚡", text: "Asking for a suggested rewrite. Nothing is measured..." },
+    { icon: "🛠️", text: "Preparing suggestions from the reply..." },
     { icon: "✨", text: "Please have patience — we're making sure your wait is worth it." },
 ]
 
@@ -24,7 +31,7 @@ const GENERATOR_STEPS = [
     { icon: "📖", text: "Reading your schema context..." },
     { icon: "🧠", text: "Understanding the natural language intent..." },
     { icon: "🔗", text: "Mapping relationships between tables..." },
-    { icon: "⚙️", text: "Constructing optimal query logic..." },
+    { icon: "⚙️", text: "Drafting a query from the description..." },
     { icon: "🧪", text: "Drafting a query. Syntax is not checked against a database..." },
     { icon: "✨", text: "Almost done — making sure your wait is worth it." },
 ]
@@ -41,7 +48,7 @@ const MONGODB_STEPS = [
     { icon: "🔗", text: "Analyzing document relationships and references..." },
     { icon: "📊", text: "Evaluating aggregation pipeline stages..." },
     { icon: "⚡", text: "Noting index-related keywords. Index use is not measured..." },
-    { icon: "🛠️", text: "Optimizing pipeline for performance..." },
+    { icon: "🛠️", text: "Drafting a pipeline suggestion. Performance is not measured..." },
     { icon: "✨", text: "Please have patience — we're making sure your wait is worth it." },
 ]
 
@@ -88,6 +95,14 @@ function messageFromErrorBody(data: unknown, status: number): string {
     if (data && typeof data === "object" && "detail" in data) {
         const detail = (data as { detail?: unknown }).detail
         if (typeof detail === "string" && detail.trim()) return detail
+        if (Array.isArray(detail)) {
+            const messages = detail.flatMap((item) => {
+                if (!item || typeof item !== "object" || !("msg" in item)) return []
+                const msg = (item as { msg?: unknown }).msg
+                return typeof msg === "string" && msg.trim() ? [msg.trim()] : []
+            })
+            if (messages.length > 0) return messages.join(" ")
+        }
     }
     return `Request failed (${status}).`
 }
@@ -126,14 +141,7 @@ async function postJson(url: string, body: unknown): Promise<{ ok: true; data: u
     return { ok: true, data }
 }
 
-function isAnalysisPayload(data: unknown): data is {
-    original_query: string
-    explanation: string
-    suggestions: unknown[]
-    execution_plan: object
-    analysis_source?: string | null
-    plan_origin?: string | null
-} {
+function isAnalysisPayload(data: unknown): data is AnalysisResult {
     if (!data || typeof data !== "object") return false
     const row = data as Record<string, unknown>
     return typeof row.original_query === "string"
@@ -143,11 +151,13 @@ function isAnalysisPayload(data: unknown): data is {
         && typeof row.execution_plan === "object"
 }
 
-function isGenerationPayload(data: unknown): data is {
+type GeneratedQuery = {
     query: string
     explanation: string
     analysis_source?: string | null
-} {
+}
+
+function isGenerationPayload(data: unknown): data is GeneratedQuery {
     if (!data || typeof data !== "object") return false
     const row = data as Record<string, unknown>
     return typeof row.query === "string" && typeof row.explanation === "string"
@@ -162,8 +172,8 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     const isMongo = dialect === "mongodb"
 
     // Optimizer State
-    const [sqlQuery, setSqlQuery] = useState<any>("SELECT * FROM users WHERE active = true")
-    const [analysisResult, setAnalysisResult] = useState<any>(null)
+    const [sqlQuery, setSqlQuery] = useState("SELECT * FROM users WHERE active = true")
+    const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
 
     // PRO Feature State
     const [isProModalOpen, setIsProModalOpen] = useState(false)
@@ -171,7 +181,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
     // Generator State
     const [schemaInput, setSchemaInput] = useState<string>("CREATE TABLE users (id INT, name TEXT, active BOOLEAN);")
     const [questionInput, setQuestionInput] = useState<string>("Show me all active users")
-    const [generatorResult, setGeneratorResult] = useState<any>(null)
+    const [generatorResult, setGeneratorResult] = useState<GeneratedQuery | null>(null)
 
     const [loading, setLoading] = useState(false)
     const [requestError, setRequestError] = useState<string | null>(null)
@@ -187,7 +197,12 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
         setAnalysisResult(null)
         setRequestError(null)
         try {
-            const result = await postJson(`${import.meta.env.VITE_API_BASE_URL}/analyze`, {
+            const apiBase = configuredApiBase()
+            if (!apiBase) {
+                setRequestError(MISSING_API_BASE)
+                return
+            }
+            const result = await postJson(apiUrl(apiBase, "/analyze"), {
                 query: sqlQuery,
                 dialect,
             })
@@ -215,7 +230,12 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
         setGeneratorResult(null)
         setRequestError(null)
         try {
-            const result = await postJson(`${import.meta.env.VITE_API_BASE_URL}/generate-sql`, {
+            const apiBase = configuredApiBase()
+            if (!apiBase) {
+                setRequestError(MISSING_API_BASE)
+                return
+            }
+            const result = await postJson(apiUrl(apiBase, "/generate-sql"), {
                 schema_def: schemaInput,
                 question: questionInput,
                 dialect,
@@ -272,7 +292,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                     ? (isMongo ? "Pipeline Review" : "Query Optimizer")
                                     : "Text-to-Query"}
                             </h1>
-                            <span className="text-[10px] text-gray-500 font-mono tracking-wider uppercase">AI Powered Engine</span>
+                            <span className="text-[10px] text-gray-500 font-mono tracking-wider uppercase">No database connection</span>
                         </div>
                     </div>
 
@@ -515,8 +535,8 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                                 </motion.div>
                                 <p className="font-mono text-sm">
                                     {mode === "optimizer"
-                                        ? "Paste your SQL above and hit Analyze"
-                                        : "Fill in your schema & question, then hit Generate"}
+                                        ? "Paste your SQL above and choose Review query"
+                                        : "Fill in your schema and question, then choose Generate"}
                                 </p>
                                 <p className="text-xs text-gray-700">Results will appear here</p>
                             </motion.div>
@@ -551,7 +571,6 @@ function LoadingPanel({ mode, isMongo }: { mode: "optimizer" | "generator"; isMo
     const [stepIdx, setStepIdx] = useState(0)
 
     useEffect(() => {
-        setStepIdx(0)
         const interval = setInterval(() => {
             setStepIdx((prev) => (prev < steps.length - 1 ? prev + 1 : prev))
         }, 3200)

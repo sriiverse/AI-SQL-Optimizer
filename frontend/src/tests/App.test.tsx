@@ -10,9 +10,13 @@ describe('LandingPage', () => {
                 <LandingPage />
             </MemoryRouter>
         )
-        // Check for the gradient text title
-        expect(screen.getByText(/Optimize SQL Queries/i)).toBeInTheDocument()
-        expect(screen.getByText(/at the Speed of Thought/i)).toBeInTheDocument()
+        const title = screen.getByRole('heading', { level: 1 })
+        expect(title).toHaveTextContent(/Review Database/i)
+        expect(title).toHaveTextContent(/Queries/i)
+        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(/Suggestions, not measurements/i)
+        expect(screen.getByText(/does not connect to a database or measure execution time/i)).toBeInTheDocument()
+        expect(screen.queryByText(/execution plans/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/Speed of Thought/i)).not.toBeInTheDocument()
     })
 
     it('renders the CTA button', () => {
@@ -21,7 +25,7 @@ describe('LandingPage', () => {
                 <LandingPage />
             </MemoryRouter>
         )
-        const button = screen.getByText(/Start Optimizing/i)
-        expect(button).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /Review a query/i })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Start Optimizing/i })).not.toBeInTheDocument()
     })
 })

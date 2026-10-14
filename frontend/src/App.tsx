@@ -2,15 +2,17 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
 import { useEffect } from "react"
 import LandingPage from "./pages/LandingPage"
 import OptimizerWorkspace from "./pages/OptimizerWorkspace"
+import { apiUrl, resolveApiBaseUrl } from "./lib/apiBase"
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const API_BASE = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL, import.meta.env.MODE)
 const PING_INTERVAL_MS = 9 * 60 * 1000 // Every 9 minutes — just under Render's 10-min sleep timeout
 
 function App() {
   useEffect(() => {
+    if (!API_BASE) return
     // Keep-alive: ping the backend health endpoint to prevent Render cold starts
     const ping = () => {
-      fetch(`${BACKEND_URL}/health`).catch(() => {
+      fetch(apiUrl(API_BASE, "/health")).catch(() => {
         // Silently ignore failures — this is just a background warmup ping
       })
     }

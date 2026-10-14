@@ -1,4 +1,4 @@
-# 🚀 AI-Powered SQL Query Optimizer & Generator
+# QueryForgeAI — SQL review and query drafts
 
 ![System Architecture](./assets/system_architecture.png)
 
@@ -6,36 +6,36 @@
 [![Stack](https://img.shields.io/badge/Stack-React_|_FastAPI_|_Gemini-blueviolet?style=flat-square)]()
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)]()
 
-A professional-grade database engineering tool that leverages **Google Gemini** and **Groq Llama-3** to analyze execution plans and generate highly optimized, enterprise-level queries for **PostgreSQL**, **MySQL**, **SQLite**, and **MongoDB**.
+A query-review assistant for **PostgreSQL**, **MySQL**, **SQLite**, and **MongoDB**. With a server-side access token it can ask **Google Gemini**, and **Groq** after a Gemini quota error. Otherwise it uses a keyword demo. It does not connect to a database, inspect an engine execution plan, or measure execution time.
 
 ---
 
-## ✨ Enterprise Features
+## What it does
 
 ### 🛡️ Multi-Provider API Resilience
-*   **Primary Engine:** Google Gemini (`gemini-flash-latest`) for rapid static analysis and generation.
-*   **Auto-Failover:** Automatically cascades to Groq's flagship `llama-3.3-70b-versatile` if Gemini rate limits are hit, ensuring 100% uptime without user intervention.
-*   **Deterministic Fallback:** Degrades seamlessly to a simulated heuristic engine if no API keys are available.
+*   **Primary model:** Google Gemini (`gemini-flash-latest`) when paid provider access is enabled.
+*   **Quota fallback:** One Groq `llama-3.3-70b-versatile` attempt after a Gemini response that reports a quota error. A timeout does not start Groq. This does not guarantee uptime.
+*   **Demo:** Keyword checks when paid access is closed or no model is configured.
 
 ### 🧠 Elite Analytics Guardrails
-The system isn't a basic text-to-SQL wrapper. It enforces **34+ strict architectural rules** during generation:
-*   **Advanced SQL:** Forces strict CTE scoping, `GENERATE_SERIES()` for sparse time-series forecasting, and mathematically flawless rolling averages.
-*   **MongoDB Mastery:** Safely handles recursive `$graphLookup` trees with `maxDepth` limits, `$setWindowFields` time-decay scoring, and faceted analytics without crashing.
+The generation prompt asks the model to follow a written checklist. The app does not prove that the model obeyed it.
+*   **SQL prompt notes:** CTE scoping, `GENERATE_SERIES()` for sparse time series, and rolling averages.
+*   **MongoDB prompt notes:** `$graphLookup` depth, `$setWindowFields`, and faceted aggregations.
 
 ### 🔍 Intelligent Optimization
-*   **Static Analysis:** Identify full table scans, missing indexes, and `SELECT *` anti-patterns.
-*   **Dialect Aware:** Generates optimization advice specific to your database engine.
+*   **Keyword demo:** Can note `SELECT *`, a missing `WHERE`, and a leading-wildcard `LIKE`. It does not inspect an engine execution plan.
+*   **Dialect label:** The selected dialect is sent with the prompt. Advice is not verified against that engine.
 
 ### ✍️ Schema-Aware Generator
-*   **Natural Language to Pipeline:** Translates "Find viral contagion risk" into 250+ line MongoDB aggregation pipelines or 10+ chained Postges CTEs.
-*   **Context Injection:** Injects user table definitions into the AI context to prevent hallucinations and invent secure joins.
+*   **Natural language draft:** Turns a question and schema text into a suggested query. Length and correctness are not guaranteed.
+*   **Schema text:** The schema you paste is included in the prompt. The app does not check that the query matches that schema.
 
 ---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-*   Node.js (v18+)
+*   Node.js 20.19+ or 22.12+ (Vite 7 and Vitest 4)
 *   Python (v3.9+)
 *   Google Gemini API Key ([Get one here](https://aistudio.google.com/))
 
@@ -49,8 +49,8 @@ cd AI-SQL-Optimizer
 ```bash
 cd backend
 pip install -r requirements.txt
-# Create .env file (See .env.example)
-echo "GEMINI_API_KEY=your_key_here" > .env
+# Copy backend/.env.example to backend/.env.
+# GEMINI_API_KEY alone does not call a provider. See PROVIDER_ACCESS_TOKEN.
 python main.py
 ```
 *Server runs at `http://localhost:8000`*
@@ -112,6 +112,12 @@ Both switches default to off. Only `1`, `true`, `yes`, or `on` enables one. Neit
 *   `AGENT_ENABLED`: when off, the agent WebSocket and `/agent` routes stay closed. Turning it on only enables the existing agent channel. It does not authenticate clients and does not make that channel safe for a public multi-user deployment. Leave it off until access control exists. The CLI in `cli/index.js` is a simulated timer. It does not connect to a database, run `EXPLAIN`, measure database time, or implement a login command.
 *   The history file is created only when `HISTORY_ENABLED` is on and a request reads or writes history. A disabled `GET /history` does not open the database.
 
+### Paid provider access
+
+`PROVIDER_ACCESS_TOKEN` is unset by default. While it is unset, `POST /analyze` and `POST /generate-sql` stay on the demo engines. They do not call Gemini or Groq, even when `GEMINI_API_KEY` or `GROQ_API_KEY` is set. The per-IP rate limit and CORS are not this control.
+
+To turn paid calls on, set `PROVIDER_ACCESS_TOKEN` on the server to a long random secret. A caller must send `Authorization: Bearer <that secret>`. A missing or wrong token returns 403 and does not call a provider. Do not put the secret in the frontend, in Netlify, or in a `VITE_` variable. The hosted page cannot send it. If the token is set, that page receives 403 instead of a demo result. Leave the token unset when the public page should keep the free demo.
+
 ### Request limits
 
 These values are read when the backend process starts. A malformed value stops startup instead of turning the protection off.
@@ -148,7 +154,7 @@ The application follows a **Hybrid Cloud Architecture**:
 ## 🚀 Getting Started
 
 ### Prerequisites
-*   Node.js & npm
+*   Node.js 20.19+ or 22.12+, and npm
 *   Python 3.10+
 *   Google Gemini API Key (Optional, for Real AI features)
 
@@ -165,8 +171,10 @@ The application follows a **Hybrid Cloud Architecture**:
     cd backend
     pip install -r requirements.txt
     
-    # Optional: Enable Real AI
-    # Create a .env file and add: GEMINI_API_KEY=your_key_here
+    # Optional: paid AI for a trusted client, not the public website.
+    # Create backend/.env with GEMINI_API_KEY and PROVIDER_ACCESS_TOKEN.
+    # Send Authorization: Bearer <PROVIDER_ACCESS_TOKEN>.
+    # The key alone leaves /analyze and /generate-sql on the demo path.
     
     uvicorn main:app --reload
     ```
@@ -183,12 +191,13 @@ The application follows a **Hybrid Cloud Architecture**:
 ### Backend (Render)
 *   **Build Command:** `pip install -r requirements.txt`
 *   **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-*   **Environment Variables:** `GEMINI_API_KEY` (Required for Real AI)
+*   **Environment Variables:** `GEMINI_API_KEY` and `GROQ_API_KEY` stay on the server. They do not enable public paid calls. Set `PROVIDER_ACCESS_TOKEN` only for a trusted client that can send `Authorization: Bearer`. Leave that token unset on a public demo. Do not set `HISTORY_ENABLED` or `AGENT_ENABLED`.
 
 ### Frontend (Netlify/Vercel)
 *   **Build Command:** `npm run build`
 *   **Output Directory:** `dist`
-*   **Environment Variables:** `VITE_API_BASE_URL` (Point to your Render Backend URL)
+*   **Environment variable:** `VITE_API_BASE_URL`
+*   Set it in the Netlify site environment to the public Render origin, with no path and no trailing slash. This repository does not record that host. A production build with the variable missing does not call localhost. Local `npm run dev` uses `http://localhost:8000` when the variable is unset. Do not put provider keys or `PROVIDER_ACCESS_TOKEN` in the frontend environment.
 
 ---
 

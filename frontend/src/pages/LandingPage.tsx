@@ -137,7 +137,7 @@ export default function LandingPage() {
                         className="text-[3rem] md:text-[4rem] lg:text-[5.5rem] font-extrabold tracking-tight leading-[1.05] drop-shadow-2xl"
                     >
                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#5eead4] via-[#60a5fa] to-[#c084fc] drop-shadow-[0_0_30px_rgba(96,165,250,0.4)]">
-                            Optimize Database
+                            Review Database
                         </span>
                         <br />
                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#c084fc] to-[#e879f9] drop-shadow-[0_0_30px_rgba(192,132,252,0.4)] block mt-1">
@@ -147,7 +147,7 @@ export default function LandingPage() {
 
                     <motion.h2 variants={itemVariants} className="text-[2rem] md:text-[2.75rem] lg:text-[3.5rem] font-extrabold tracking-tight mt-[-5px]">
                         <span className="text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.3)]">
-                            at the Speed of Thought
+                            Suggestions, not measurements
                         </span>
                     </motion.h2>
                 </motion.div>
@@ -159,7 +159,7 @@ export default function LandingPage() {
                     transition={{ duration: 1, delay: 0.5 }}
                     className="text-[1rem] md:text-[1.1rem] text-gray-300 text-center max-w-2xl mb-8 font-medium tracking-wide drop-shadow-md"
                 >
-                    Leverage advanced AI to dissect execution plans, identify bottlenecks, and rewrite inefficient queries instantly.
+                    Ask a model for a suggested rewrite, or use the keyword demo. This app does not connect to a database or measure execution time.
                 </motion.p>
 
                 {/* ─── Neon Code Card ─── */}
@@ -214,7 +214,7 @@ export default function LandingPage() {
                             className="h-[54px] px-8 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-[16px] tracking-wide border border-white/10 hover:from-purple-500 hover:to-indigo-500 transition-all shadow-[0_0_30px_rgba(139,92,246,0.3)] flex items-center gap-3"
                             onClick={() => navigate("/optimizer")}
                         >
-                            <Zap className="w-5 h-5 fill-white" /> Start Optimizing
+                            <Zap className="w-5 h-5 fill-white" /> Review a query
                         </Button>
                     </motion.div>
 

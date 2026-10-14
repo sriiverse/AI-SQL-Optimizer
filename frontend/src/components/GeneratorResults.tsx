@@ -82,7 +82,7 @@ function normalizeCode(raw: string): string {
             .replace(/\],/g, "\n],")
             .replace(/\],\s*\{/g, "],\n{")
             .replace(/,\s*\$/g, ",\n  $")
-            .replace(/\n  \n/g, "\n")
+            .replace(/\n {2}\n/g, "\n")
     }
     return code
 }

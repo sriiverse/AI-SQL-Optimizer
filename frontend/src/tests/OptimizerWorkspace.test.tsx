@@ -79,6 +79,26 @@ describe('OptimizerWorkspace request handling', () => {
         expect(screen.queryByText('Analysis Report')).not.toBeInTheDocument()
     })
 
+    it('shows a safe validation message and does not echo the submitted query', async () => {
+        const marker = 'secret-query-marker-should-not-echo'
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+            detail: [
+                { type: 'value_error', loc: ['body', 'query'], msg: 'Query exceeds the maximum length of 20000 characters.' },
+            ],
+        }, 422)))
+        renderOptimizer()
+
+        fireEvent.change(screen.getByPlaceholderText(/SELECT \* FROM users/i), {
+            target: { value: marker },
+        })
+        fireEvent.click(screen.getByRole('button', { name: /Review query/i }))
+
+        const alert = await screen.findByRole('alert')
+        expect(alert).toHaveTextContent('Query exceeds the maximum length of 20000 characters.')
+        expect(alert).not.toHaveTextContent(marker)
+        expect(screen.queryByText('Analysis Report')).not.toBeInTheDocument()
+    })
+
     it('handles a non-JSON error body', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response('bad gateway', { status: 502 })))
         renderOptimizer()

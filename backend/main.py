@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException
+import hashlib
+import secrets
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +55,53 @@ def agent_enabled() -> bool:
     return flag_is_enabled(os.environ.get("AGENT_ENABLED"))
 
 
+def read_provider_access_token() -> Optional[str]:
+    """Server secret for paid Gemini and Groq calls. Missing or blank stays closed."""
+    raw = os.environ.get("PROVIDER_ACCESS_TOKEN")
+    if raw is None:
+        return None
+    token = raw.strip()
+    return token or None
+
+
+def provider_access_token() -> Optional[str]:
+    # Read on each request. Tests replace this function. A value in frontend
+    # JavaScript is not this control and must not be treated as one.
+    return read_provider_access_token()
+
+
+def paid_provider_access(authorization: Optional[str]) -> str:
+    """Return closed, denied, or allowed.
+
+    closed: no server token is configured, so paid providers stay off.
+    denied: a token is configured and this request did not present it.
+    allowed: the bearer token matches the server secret.
+    """
+    expected = provider_access_token()
+    if not expected:
+        return "closed"
+    if authorization is None:
+        return "denied"
+    scheme, _, presented = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not presented.strip() or presented != presented.strip():
+        return "denied"
+    presented_hash = hashlib.sha256(presented.encode("utf-8")).digest()
+    expected_hash = hashlib.sha256(expected.encode("utf-8")).digest()
+    if not secrets.compare_digest(presented_hash, expected_hash):
+        return "denied"
+    return "allowed"
+
+
+def _require_paid_provider_access(authorization: Optional[str]) -> str:
+    access = paid_provider_access(authorization)
+    if access == "denied":
+        raise HTTPException(
+            status_code=403,
+            detail="Paid provider access is not authorized.",
+        )
+    return access
+
+
 # --- Module-level singleton: model is initialized ONCE at startup ---
 _gemini_model = None
 
@@ -101,11 +150,12 @@ def get_model():
 app.add_middleware(RateLimitMiddleware, limiter=limiter)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 
-# Configure CORS for frontend
+# Browser access for the public UI. This is not authentication.
+# Credentials stay off because origins are unrestricted and the app has no cookies.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -134,20 +184,34 @@ def _coerce_analysis(result) -> AnalysisResult:
     return AnalysisResult.model_validate(result)
 
 
+def _demo_analysis(query: str, dialect: str):
+    if dialect == "mongodb":
+        return analyze_pipeline_demo(query)
+    return analyze_query_demo(query)
+
+
+def _demo_generation(schema_def: str, question: str, dialect: str):
+    if dialect == "mongodb":
+        return generate_mongodb_demo(schema_def, question)
+    return generate_sql_demo(schema_def, question)
+
+
 @app.post("/analyze", response_model=AnalysisResult)
-async def analyze_query_endpoint(request: AnalyzeRequest):
+async def analyze_query_endpoint(
+    request: AnalyzeRequest,
+    authorization: Optional[str] = Header(default=None),
+):
+    # Paid providers run only when this process has PROVIDER_ACCESS_TOKEN and
+    # the caller presents it. CORS and the client IP are not that check.
+    access = _require_paid_provider_access(authorization)
     try:
-        model = get_model()
+        model = get_model() if access == "allowed" else None
         if model:
             raw_result = await analyze_query_with_gemini(
                 request.query, request.dialect, model
             )
         else:
-            # Demo/fallback mode: route to MongoDB or SQL analyser
-            if request.dialect == "mongodb":
-                raw_result = analyze_pipeline_demo(request.query)
-            else:
-                raw_result = analyze_query_demo(request.query)
+            raw_result = _demo_analysis(request.query, request.dialect)
         result = _coerce_analysis(raw_result)
     except Exception:
         logger.exception("Analysis failed")
@@ -165,18 +229,18 @@ async def analyze_query_endpoint(request: AnalyzeRequest):
 
 
 @app.post("/generate-sql", response_model=TextToSqlResponse)
-async def generate_sql_endpoint(request: TextToSqlRequest):
+async def generate_sql_endpoint(
+    request: TextToSqlRequest,
+    authorization: Optional[str] = Header(default=None),
+):
+    access = _require_paid_provider_access(authorization)
     try:
-        model = get_model()
+        model = get_model() if access == "allowed" else None
         if model:
             return await generate_sql_with_gemini(
                 request.schema_def, request.question, request.dialect, model
             )
-        else:
-            # Demo/fallback mode: route to MongoDB or SQL generator
-            if request.dialect == "mongodb":
-                return generate_mongodb_demo(request.schema_def, request.question)
-            return generate_sql_demo(request.schema_def, request.question)
+        return _demo_generation(request.schema_def, request.question, request.dialect)
     except Exception:
         logger.exception("SQL generation failed")
         raise HTTPException(status_code=500, detail="SQL generation failed")

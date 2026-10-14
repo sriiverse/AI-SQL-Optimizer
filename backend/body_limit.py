@@ -1,8 +1,9 @@
 """Reject oversized HTTP bodies before the application reads them.
 
-Requests that already declare a safe Content-Length keep the original receive
-stream. Chunked requests are buffered only up to the configured ceiling and
-then replayed unchanged, or rejected without calling the application.
+A declared Content-Length above the ceiling is rejected without reading.
+Every other body is counted from the bytes actually received. A declared
+length at or below the ceiling does not skip that count. Accepted bodies are
+replayed unchanged.
 """
 
 from starlette.datastructures import Headers
@@ -40,8 +41,6 @@ class BodySizeLimitMiddleware:
                 # Do not call receive. The application and providers never see this body.
                 await _reject(scope, receive, send, 413, "Request body is too large.")
                 return
-            await self.app(scope, receive, send)
-            return
 
         chunks = []
         total = 0

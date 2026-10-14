@@ -42,15 +42,16 @@ def test_health_endpoint():
 
 @patch("main.analyze_query_with_gemini", new_callable=AsyncMock)
 @patch("main.get_model")
-def test_analyze_endpoint_mock(mock_get_model, mock_analyze):
+def test_analyze_endpoint_mock(mock_get_model, mock_analyze, monkeypatch):
     # Return a fake model so the AI branch is triggered
     mock_get_model.return_value = MagicMock()
     mock_analyze.return_value = MOCK_ANALYZE_RESPONSE
+    monkeypatch.setattr("main.provider_access_token", lambda: "test-token")
 
     response = client.post("/analyze", json={
         "query": "SELECT * FROM users",
         "dialect": "postgresql"
-    })
+    }, headers={"Authorization": "Bearer test-token"})
 
     assert response.status_code == 200
     data = response.json()
@@ -59,16 +60,17 @@ def test_analyze_endpoint_mock(mock_get_model, mock_analyze):
 
 @patch("main.generate_sql_with_gemini", new_callable=AsyncMock)
 @patch("main.get_model")
-def test_generate_endpoint_mock(mock_get_model, mock_generate):
+def test_generate_endpoint_mock(mock_get_model, mock_generate, monkeypatch):
     # Return a fake model so the AI branch is triggered
     mock_get_model.return_value = MagicMock()
     mock_generate.return_value = MOCK_GENERATOR_RESPONSE
+    monkeypatch.setattr("main.provider_access_token", lambda: "test-token")
 
     response = client.post("/generate-sql", json={
         "schema_def": "CREATE TABLE users (id INT)",
         "question": "Get all users",
         "dialect": "mysql"
-    })
+    }, headers={"Authorization": "Bearer test-token"})
 
     assert response.status_code == 200
     assert response.json()["query"] == "SELECT * FROM users"

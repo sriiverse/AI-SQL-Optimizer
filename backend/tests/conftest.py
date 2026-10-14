@@ -1,4 +1,4 @@
-"""Keep history and the agent off unless a test overrides the feature checks."""
+"""Keep history, the agent, and paid providers off unless a test overrides them."""
 
 import pytest
 
@@ -8,6 +8,7 @@ def _history_and_agent_default_off(monkeypatch):
     # Override the feature functions. Do not change os.environ after import.
     monkeypatch.setattr("main.history_enabled", lambda: False)
     monkeypatch.setattr("main.agent_enabled", lambda: False)
+    monkeypatch.setattr("main.provider_access_token", lambda: None)
 
 
 @pytest.fixture(autouse=True)

@@ -135,6 +135,7 @@ def test_history_failure_still_returns_analysis(monkeypatch):
 
 def test_gemini_analyze_provenance(monkeypatch):
     monkeypatch.setattr("main.get_model", lambda: object())
+    monkeypatch.setattr("main.provider_access_token", lambda: "test-token")
 
     async def fake_analyze(query, dialect, model):
         from analyze import analyze_query_with_gemini
@@ -147,7 +148,11 @@ def test_gemini_analyze_provenance(monkeypatch):
 
     monkeypatch.setattr("main.analyze_query_with_gemini", fake_analyze)
 
-    response = client.post("/analyze", json={"query": "SELECT id FROM users", "dialect": "postgresql"})
+    response = client.post(
+        "/analyze",
+        json={"query": "SELECT id FROM users", "dialect": "postgresql"},
+        headers={"Authorization": "Bearer test-token"},
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["analysis_source"] == "gemini"

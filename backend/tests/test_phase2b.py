@@ -274,6 +274,20 @@ def test_chunked_body_over_limit_does_not_reach_the_app_and_small_chunks_are_rep
     assert passed == [b"abc"]
     assert _status(declared_sent) == 200
 
+    entered = False
+
+    async def understated(scope, receive, send):
+        nonlocal entered
+        entered = True
+
+    understated_sent = _invoke(
+        BodySizeLimitMiddleware(understated, max_bytes=16),
+        _scope(headers=[(b"content-length", b"3")]),
+        [{"type": "http.request", "body": b"x" * 50, "more_body": False}],
+    )
+    assert entered is False
+    assert _status(understated_sent) == 413
+
 
 def test_invalid_content_length_is_rejected():
     entered = False
@@ -408,12 +422,16 @@ def test_rate_limit_boundary_ignores_forwarded_for_and_skips_health(monkeypatch)
 
     monkeypatch.setattr("main.get_model", lambda: object())
     monkeypatch.setattr("main.analyze_query_with_gemini", fake)
+    monkeypatch.setattr("main.provider_access_token", lambda: "test-token")
 
     for index in range(RATE_LIMIT_REQUESTS):
         response = client.post(
             "/analyze",
             json={"query": "SELECT 1", "dialect": "postgresql"},
-            headers={"X-Forwarded-For": f"198.51.100.{index}"},
+            headers={
+                "X-Forwarded-For": f"198.51.100.{index}",
+                "Authorization": "Bearer test-token",
+            },
         )
         assert response.status_code == 200
 

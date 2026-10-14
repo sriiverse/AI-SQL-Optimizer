@@ -10,6 +10,10 @@ services:
         value: 3.10.13
       - key: GEMINI_API_KEY
         sync: false
+      # Leave PROVIDER_ACCESS_TOKEN unset on this public service unless a
+      # trusted client, not the website, will send Authorization: Bearer.
+      # While it is unset, analysis and generation stay on the demo path and
+      # do not call Gemini or Groq, even if GEMINI_API_KEY is present.
       # Do not set HISTORY_ENABLED or AGENT_ENABLED on this public service.
       # Both default to off. Neither flag is authentication. History is one
       # shared SQLite file, and the agent accepts any client id when enabled.

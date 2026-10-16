@@ -276,18 +276,19 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
             {/* ─── Sticky Header ─── */}
             <header className="h-auto border-b border-white/10 flex-none bg-[#030014]/85 backdrop-blur-md z-50 sticky top-0 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
                 {/* Main header row */}
-                <div className="flex items-center justify-between px-4 md:px-6 h-16">
-                    <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 md:px-6 py-2">
+                    <div className="flex items-center gap-3 min-w-0 flex-1 basis-[12rem]">
                         <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => navigate("/")}
-                            className="hover:bg-white/10 text-gray-400 hover:text-white transition-all hover:scale-110 active:scale-95"
+                            aria-label="Back to home"
+                            className="shrink-0 hover:bg-white/10 text-gray-400 hover:text-white transition-all hover:scale-110 active:scale-95"
                         >
                             <ArrowLeft className="h-5 w-5" />
                         </Button>
-                        <div className="flex flex-col">
-                            <h1 className="font-bold text-lg tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
+                        <div className="flex flex-col min-w-0">
+                            <h1 className="font-bold text-lg leading-tight tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
                                 {mode === "optimizer"
                                     ? (isMongo ? "Pipeline Review" : "Query Optimizer")
                                     : "Text-to-Query"}
@@ -296,33 +297,35 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-end gap-2 w-full min-[1024px]:w-auto min-[1024px]:ml-auto">
                         {/* PRO Button */}
                         <motion.button
                             whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                             onClick={() => setIsProModalOpen(true)}
-                            className="relative group overflow-hidden px-4 md:px-5 py-1.5 rounded-full bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 border border-purple-500/30 font-semibold text-xs text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] mr-2 flex items-center gap-1.5"
+                            className="relative group overflow-hidden min-h-11 px-4 md:px-5 rounded-full bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 border border-purple-500/30 font-semibold text-xs text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] flex items-center gap-1.5"
                         >
                             <span className="absolute inset-0 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
                             <Star className="w-3.5 h-3.5 text-yellow-300 drop-shadow-[0_0_8px_rgba(253,224,71,0.8)] fill-yellow-300" />
                             <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-200 via-purple-200 to-pink-200 tracking-wider">PRO</span>
                         </motion.button>
 
-                        {/* Dialect Selector */}
-                        <span className="text-xs text-gray-500 uppercase tracking-widest hidden md:block">Dialect:</span>
+                        {/* Dialect Selector. Names stay hidden until the row can hold them. */}
+                        <span className="text-xs text-gray-500 uppercase tracking-widest hidden min-[1024px]:block">Dialect:</span>
                         <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
                             {DIALECTS.map((d) => (
                                 <button
                                     key={d.id}
                                     onClick={() => setDialect(d.id)}
-                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${dialect === d.id
-                                        ? "bg-gradient-to-r from-purple-500/25 to-blue-500/25 text-blue-200 border border-blue-500/30 shadow-[0_0_12px_rgba(59,130,246,0.25)] scale-105"
-                                        : "text-gray-400 hover:bg-white/5 hover:text-gray-200 hover:scale-105"
+                                    aria-label={d.name}
+                                    aria-pressed={dialect === d.id}
+                                    className={`flex items-center justify-center gap-1.5 min-h-11 min-w-11 px-3 rounded-md text-xs font-medium transition-all duration-200 ${dialect === d.id
+                                        ? "bg-gradient-to-r from-purple-500/25 to-blue-500/25 text-blue-200 border border-blue-500/30 shadow-[0_0_12px_rgba(59,130,246,0.25)]"
+                                        : "text-gray-400 hover:bg-white/5 hover:text-gray-200"
                                         }`}
                                 >
-                                    <span>{d.icon}</span>
-                                    <span className="hidden md:inline">{d.name}</span>
+                                    <span aria-hidden="true">{d.icon}</span>
+                                    <span className="hidden min-[1024px]:inline">{d.name}</span>
                                 </button>
                             ))}
                         </div>
@@ -331,13 +334,15 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                         <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
                             <button
                                 onClick={() => navigate("/optimizer")}
-                                className={`text-xs px-4 py-1.5 rounded-md transition-all duration-200 ${mode === "optimizer" ? "bg-white/10 text-white shadow-sm scale-105" : "text-gray-500 hover:text-gray-300"}`}
+                                aria-pressed={mode === "optimizer"}
+                                className={`text-xs min-h-11 px-4 rounded-md transition-all duration-200 ${mode === "optimizer" ? "bg-white/10 text-white shadow-sm" : "text-gray-500 hover:text-gray-300"}`}
                             >
                                 Optimizer
                             </button>
                             <button
                                 onClick={() => navigate("/generator")}
-                                className={`text-xs px-4 py-1.5 rounded-md transition-all duration-200 ${mode === "generator" ? "bg-white/10 text-white shadow-sm scale-105" : "text-gray-500 hover:text-gray-300"}`}
+                                aria-pressed={mode === "generator"}
+                                className={`text-xs min-h-11 px-4 rounded-md transition-all duration-200 ${mode === "generator" ? "bg-white/10 text-white shadow-sm" : "text-gray-500 hover:text-gray-300"}`}
                             >
                                 Generator
                             </button>

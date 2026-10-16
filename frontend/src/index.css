@@ -121,3 +121,13 @@
     stroke-dashoffset: 0;
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-float,
+  .animate-spin,
+  .animate-pulse,
+  .animate-ping,
+  .current-flow {
+    animation: none !important;
+  }
+}

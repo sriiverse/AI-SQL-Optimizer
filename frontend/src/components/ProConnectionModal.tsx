@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion"
 import { CommandLineIcon, ServerIcon, ShieldCheckIcon, XMarkIcon, SparklesIcon, ChevronRightIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "./ui/button"
 
 interface ProModalProps {
@@ -10,6 +10,46 @@ interface ProModalProps {
 
 export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
     const [copiedContent, setCopiedContent] = useState<string | null>(null)
+    const dialogRef = useRef<HTMLDivElement>(null)
+    const onCloseRef = useRef(onClose)
+
+    useEffect(() => {
+        onCloseRef.current = onClose
+    }, [onClose])
+
+    useEffect(() => {
+        if (!isOpen) return
+        const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        dialogRef.current?.focus()
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault()
+                onCloseRef.current()
+                return
+            }
+            if (event.key !== "Tab") return
+            const root = dialogRef.current
+            if (!root) return
+            const items = [...root.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])")]
+                .filter((el) => el.tabIndex >= 0)
+            if (items.length === 0) {
+                event.preventDefault()
+                return
+            }
+            const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+            const index = active ? items.indexOf(active) : -1
+            event.preventDefault()
+            const next = event.shiftKey
+                ? items[(index <= 0 ? items.length : index) - 1]
+                : items[index === -1 || index === items.length - 1 ? 0 : index + 1]
+            next.focus()
+        }
+        document.addEventListener("keydown", onKey)
+        return () => {
+            document.removeEventListener("keydown", onKey)
+            previouslyFocused?.focus()
+        }
+    }, [isOpen])
 
     if (!isOpen) return null
 
@@ -33,23 +73,31 @@ export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
 
                 {/* Modal Container */}
                 <motion.div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="pro-modal-title"
+                    tabIndex={-1}
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: 20 }}
                     transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                    className="relative w-full max-w-5xl bg-[#0a0a0f]/90 backdrop-blur-3xl border border-white/10 rounded-3xl shadow-[0_0_80px_rgba(139,92,246,0.15)] overflow-hidden flex flex-col md:flex-row"
+                    className="relative flex w-[min(100%,64rem)] min-w-0 max-h-[calc(100dvh-2rem)] flex-col overflow-hidden bg-[#0a0a0f]/90 backdrop-blur-3xl border border-white/10 rounded-3xl shadow-[0_0_80px_rgba(139,92,246,0.15)] outline-none"
                 >
-                    {/* Glowing Orbs behind the modal contents */}
-                    <div className="absolute top-[-20%] left-[-10%] w-[300px] h-[300px] rounded-full bg-blue-600/20 blur-[100px] pointer-events-none" />
-                    <div className="absolute bottom-[-20%] right-[-10%] w-[300px] h-[300px] rounded-full bg-purple-600/20 blur-[100px] pointer-events-none" />
+                    {/* Orbs stay clipped so they cannot extend the scrollable area. */}
+                    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+                        <div className="absolute top-[-20%] left-[-10%] w-[300px] h-[300px] rounded-full bg-blue-600/20 blur-[100px]" />
+                        <div className="absolute bottom-[-20%] right-[-10%] w-[300px] h-[300px] rounded-full bg-purple-600/20 blur-[100px]" />
+                    </div>
 
+                    <div className="relative z-10 flex min-h-0 w-full flex-1 flex-col overflow-y-auto md:flex-row">
                     {/* Left Column: The "Why" & Features */}
-                    <div className="flex-1 p-8 md:p-10 border-r border-white/5 relative z-10 flex flex-col justify-center">
+                    <div className="flex-1 min-w-0 p-8 md:p-10 border-r border-white/5 relative z-10 flex flex-col justify-center">
                         <div className="flex items-center gap-3 mb-6">
                             <div className="p-2.5 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-purple-500/30">
                                 <SparklesIcon className="w-6 h-6 text-purple-400" />
                             </div>
-                            <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+                            <h2 id="pro-modal-title" className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
                                 QueryForge <span className="text-purple-400 uppercase tracking-widest text-sm align-top ml-1">Pro</span>
                             </h2>
                         </div>
@@ -78,10 +126,12 @@ export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
                     </div>
 
                     {/* Right Column: The "How" (Terminal UI) */}
-                    <div className="flex-1 bg-black/40 p-8 md:p-10 relative z-10">
+                    <div className="flex-1 min-w-0 bg-black/40 p-8 md:p-10 relative z-10">
                         {/* Close button inside the right pane */}
                         <button
+                            type="button"
                             onClick={onClose}
+                            aria-label="Close"
                             className="absolute top-6 right-6 p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors"
                         >
                             <XMarkIcon className="w-6 h-6" />
@@ -128,18 +178,19 @@ export function ProConnectionModal({ isOpen, onClose }: ProModalProps) {
                         </div>
 
                         {/* Status Footer */}
-                        <div className="flex items-center justify-between p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
-                            <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
+                            <div className="flex items-center gap-3 min-w-0">
                                 <div className="relative flex h-3 w-3">
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
                                     <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
                                 </div>
-                                <span className="text-sm font-medium text-purple-300">This panel does not connect to a database.</span>
+                                <span className="text-sm font-medium text-purple-300 break-words">This panel does not connect to a database.</span>
                             </div>
                             <Button variant="outline" className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 hover:bg-white/10">
                                 View Docs <ChevronRightIcon className="w-3 h-3 ml-1" />
                             </Button>
                         </div>
+                    </div>
                     </div>
                 </motion.div>
             </div>
@@ -168,16 +219,18 @@ function TerminalCommand({ step, cmd, desc, copiedContent, onCopy }: { step: str
         <div className="group relative">
             <div className="flex items-start gap-4">
                 <span className="text-gray-600 select-none">{step}</span>
-                <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                        <span className="text-green-400 font-medium">
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-green-400 font-medium break-words">
                             <span className="text-pink-500 mr-2">$</span>
                             {cmd}
                         </span>
                         <button
+                            type="button"
                             onClick={() => onCopy(cmd)}
-                            className="p-1.5 rounded-md hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors opacity-0 group-hover:opacity-100"
+                            className="shrink-0 min-h-11 min-w-11 inline-flex items-center justify-center rounded-md hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
                             title="Copy to clipboard"
+                            aria-label="Copy to clipboard"
                         >
                             <DocumentDuplicateIcon className="w-4 h-4" />
                         </button>

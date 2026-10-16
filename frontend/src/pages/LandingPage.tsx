@@ -27,7 +27,7 @@ export default function LandingPage() {
 
     return (
         // The container needs a very dark indigo base
-        <div className="relative h-[100dvh] flex flex-col items-center justify-center overflow-hidden bg-[#020014] selection:bg-purple-500/30 font-sans text-white">
+        <div className="relative min-h-[100dvh] flex flex-col overflow-x-hidden bg-[#020014] selection:bg-purple-500/30 font-sans text-white">
 
             {/* ─── 1. Background Layers (Hyper-Space / Cyber-Grid) ─── */}
             <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
@@ -101,9 +101,10 @@ export default function LandingPage() {
             </div>
 
             {/* ─── Contact Info (Top Right) ─── */}
-            <div className="absolute top-6 right-6 z-50 flex gap-4">
+            <div className="relative z-50 flex justify-end gap-4 px-4 pt-4 sm:px-6 sm:pt-6">
                 <motion.a
                     href="mailto:sudhanshutheking183@gmail.com"
+                    aria-label="Email"
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.95 }}
                     className="p-3 bg-white/5 backdrop-blur-md rounded-full border border-white/10 hover:bg-white/10 transition-colors flex items-center justify-center"
@@ -114,6 +115,7 @@ export default function LandingPage() {
                     href="https://www.linkedin.com/in/sudhanshu-sinha-4619a429a/"
                     target="_blank"
                     rel="noreferrer"
+                    aria-label="LinkedIn"
                     whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.95 }}
                     className="p-3 bg-white/5 backdrop-blur-md rounded-full border border-white/10 hover:bg-white/10 transition-colors flex items-center justify-center"
@@ -123,7 +125,7 @@ export default function LandingPage() {
             </div>
 
             {/* ─── Main Content Area ─── */}
-            <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-5xl px-4 mt-[-60px]">
+            <div className="relative z-10 flex flex-1 flex-col items-center justify-[safe_center] w-full max-w-5xl mx-auto px-4 py-6">
 
                 {/* Heading */}
                 <motion.div
@@ -134,7 +136,7 @@ export default function LandingPage() {
                 >
                     <motion.h1
                         variants={itemVariants}
-                        className="text-[3rem] md:text-[4rem] lg:text-[5.5rem] font-extrabold tracking-tight leading-[1.05] drop-shadow-2xl"
+                        className="text-[2rem] sm:text-[3rem] md:text-[4rem] lg:text-[5.5rem] font-extrabold tracking-tight leading-[1.05] drop-shadow-2xl"
                     >
                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#5eead4] via-[#60a5fa] to-[#c084fc] drop-shadow-[0_0_30px_rgba(96,165,250,0.4)]">
                             Review Database
@@ -145,7 +147,7 @@ export default function LandingPage() {
                         </span>
                     </motion.h1>
 
-                    <motion.h2 variants={itemVariants} className="text-[2rem] md:text-[2.75rem] lg:text-[3.5rem] font-extrabold tracking-tight mt-[-5px]">
+                    <motion.h2 variants={itemVariants} className="text-[1.35rem] sm:text-[2rem] md:text-[2.75rem] lg:text-[3.5rem] font-extrabold tracking-tight mt-1 sm:mt-[-5px]">
                         <span className="text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.3)]">
                             Suggestions, not measurements
                         </span>
@@ -235,14 +237,14 @@ export default function LandingPage() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 1, delay: 1.2 }}
-                className="absolute bottom-8 left-8 z-50 flex items-center gap-3"
+                className="relative z-50 mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-8 sm:px-8"
             >
                 <div className="h-[1px] w-12 bg-gradient-to-r from-transparent to-[#00f7ff] shadow-[0_0_5px_#00f7ff]"></div>
-                <span className="text-[10px] sm:text-[11px] font-mono text-gray-400 tracking-[0.2em]">
+                <span className="text-[10px] sm:text-[11px] font-mono text-gray-400 tracking-[0.08em] sm:tracking-[0.2em]">
                     PART OF <span className="text-white font-bold ml-1 hover:text-[#00f7ff] transition-colors drop-shadow-[0_0_5px_rgba(0,247,255,0.5)]">SRIIVERSEAI</span>
                 </span>
                 <span className="w-[1px] h-3 bg-white/20 mx-1"></span>
-                <span className="text-[10px] sm:text-[11px] font-mono text-gray-400 tracking-[0.2em]">
+                <span className="text-[10px] sm:text-[11px] font-mono text-gray-400 tracking-[0.08em] sm:tracking-[0.2em]">
                     BUILT BY <span className="text-white font-bold ml-1">SUDHANSHU SINHA</span>
                 </span>
             </motion.div>

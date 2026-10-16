@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
+import { MotionConfig } from "framer-motion"
 import { useEffect } from "react"
 import LandingPage from "./pages/LandingPage"
 import OptimizerWorkspace from "./pages/OptimizerWorkspace"
@@ -25,6 +26,7 @@ function App() {
   }, [])
 
   return (
+    <MotionConfig reducedMotion="user">
     <Router>
       <div className="dark min-h-screen bg-background text-foreground font-sans antialiased selection:bg-primary/20">
         <Routes>
@@ -34,6 +36,7 @@ function App() {
         </Routes>
       </div>
     </Router>
+    </MotionConfig>
   )
 }
 

@@ -153,16 +153,16 @@ function extractNameFromDetail(detail: string): string {
 
 function ExplainTreeNode({ node }: { node: ExplainTreeNode }) {
   return (
-    <div className="flex items-start gap-3 pl-2 pt-1">
-      <div className="h-3 w-3 border-l-2 border-purple-500 pl-1 mt-0.5" />
-      <div className="flex-1 space-y-1">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <span className="text-purple-400">{node.name}</span>
-          <span className="text-gray-400">•</span>
-          <span className="text-gray-500">{node.detail}</span>
+    <div className="flex items-start gap-3 pl-2 pt-1 min-w-0">
+      <div className="mt-1 h-3 w-3 shrink-0 border-l-2 border-purple-500" />
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-sm font-medium">
+          <span className="break-words text-purple-400">{node.name}</span>
+          {node.detail ? <span className="text-gray-400">•</span> : null}
+          {node.detail ? <span className="min-w-0 break-words text-gray-500">{node.detail}</span> : null}
         </div>
         {node.children.length > 0 && (
-          <div className="pl-4 border-l-2 border-purple-500/30">
+          <div className="border-l-2 border-purple-500/30 pl-4">
             {node.children.map((child, index) => (
               <ExplainTreeNode key={index} node={child} />
             ))}

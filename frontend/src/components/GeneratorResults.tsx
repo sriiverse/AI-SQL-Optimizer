@@ -1,6 +1,6 @@
 import { motion } from "framer-motion"
 import { Sparkles, Copy, Check, Code2, GitBranch } from "lucide-react"
-import React, { useState, useMemo } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 
 type GeneratorResponse = {
     query: string
@@ -91,9 +91,38 @@ const CodeBlock = React.memo(function CodeBlock({ code }: { code: string }) {
     // Memoize all line processing — never re-run regex on every parent render
     const lines = useMemo(() => normalizeCode(code).split("\n"), [code])
     const highlighted = useMemo(() => lines.map((line) => highlight(line)), [lines])
+    const scrollerRef = useRef<HTMLDivElement>(null)
+    const [canScrollX, setCanScrollX] = useState(false)
+    const [atEnd, setAtEnd] = useState(true)
+
+    useEffect(() => {
+        const el = scrollerRef.current
+        if (!el) return
+        const update = () => {
+            const overflow = el.scrollWidth > el.clientWidth + 1
+            setCanScrollX(overflow)
+            setAtEnd(!overflow || el.scrollLeft + el.clientWidth >= el.scrollWidth - 2)
+        }
+        update()
+        el.addEventListener("scroll", update)
+        if (typeof ResizeObserver === "undefined") {
+            window.addEventListener("resize", update)
+            return () => {
+                window.removeEventListener("resize", update)
+                el.removeEventListener("scroll", update)
+            }
+        }
+        const observer = new ResizeObserver(update)
+        observer.observe(el)
+        return () => {
+            observer.disconnect()
+            el.removeEventListener("scroll", update)
+        }
+    }, [lines])
 
     return (
-        <div className="flex font-mono text-[12.5px] leading-6 overflow-x-auto overflow-y-auto max-h-[580px] select-text">
+        <div className="relative">
+        <div ref={scrollerRef} className="flex font-mono text-[12.5px] leading-6 overflow-x-auto overflow-y-auto max-h-[580px] select-text">
             {/* Line numbers gutter */}
             <div
                 className="select-none flex flex-col items-end pr-4 pl-4 text-gray-600 border-r border-white/10 bg-black/30 sticky left-0 shrink-0"
@@ -112,6 +141,12 @@ const CodeBlock = React.memo(function CodeBlock({ code }: { code: string }) {
                     </div>
                 ))}
             </div>
+        </div>
+        {canScrollX && !atEnd && (
+            <div className="pointer-events-none absolute bottom-2 right-3 rounded bg-black/70 px-2 py-0.5 font-mono text-[10px] tracking-wide text-gray-300" aria-hidden="true">
+                Scroll →
+            </div>
+        )}
         </div>
     )
 })
@@ -167,7 +202,7 @@ export function GeneratorResults({
                         whileHover={{ scale: 1.08 }}
                         whileTap={{ scale: 0.93 }}
                         transition={{ type: "spring", stiffness: 400, damping: 20 }}
-                        className={`flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded-md border transition-all duration-200 ${copied
+                        className={`flex items-center gap-1.5 min-h-11 text-[11px] font-medium px-3 rounded-md border transition-all duration-200 ${copied
                             ? "bg-green-500/15 border-green-500/30 text-green-400"
                             : "bg-white/5 border-white/12 text-gray-400 hover:border-indigo-500/40 hover:text-indigo-300"
                             }`}

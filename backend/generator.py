@@ -1,4 +1,5 @@
 from models import TextToSqlResponse, reported_provenance
+from provider_errors import is_quota_error, log_provider_failure
 from provider_timeout import ProviderTimeout, await_provider
 from safety_config import generation_timeout_seconds
 import logging
@@ -7,6 +8,127 @@ import re
 import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
+
+_SQL_STATEMENT = re.compile(r"^(?:select|with|insert|update|delete)\b", re.IGNORECASE)
+_MONGO_STATEMENT = re.compile(r"^(?:db\.|\[|\{)")
+
+
+def _accepted_query(query: str, dialect: str) -> bool:
+    """A query extracted from the labeled or fenced response format."""
+    text = query.strip()
+    if not text:
+        return False
+    if dialect == "mongodb":
+        return _MONGO_STATEMENT.match(text) is not None
+    return _SQL_STATEMENT.match(text) is not None
+
+
+_QUOTED = re.compile(r"('([^'\\]|\\.)*'|\"([^\"\\]|\\.)*\"|`([^`\\]|\\.)*`)")
+_COMPACT_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*\S+$")
+
+
+def _sql_token_ok(token: str) -> bool:
+    """A SQL token. A path or a second bare value on an assignment is not one."""
+    core = token.strip("()[]{},;")
+    if core == "":
+        return True
+    if re.fullmatch(r"[=<>!+\-*/%.,;:|&]+", core):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?", core):
+        return True
+    if re.fullmatch(r"\$?[A-Za-z_][\w$]*(?:\.[A-Za-z_$\d]+)*", core):
+        return True
+    if re.fullmatch(r"\$?[A-Za-z_][\w$]*\([^();]{0,200}\)", core):
+        return True
+    return False
+
+
+def _query_lines_ok(query: str, dialect: str) -> bool:
+    """Every non-empty line belongs to the statement. This is not a SQL parser."""
+    saw_line = False
+    for line in query.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        saw_line = True
+        if dialect == "mongodb":
+            if stripped.startswith("//"):
+                continue
+            if stripped.startswith(("db.", "[", "{", "]", "}", ")")) or "$" in stripped or stripped[:1] in "{[}]":
+                continue
+            return False
+        if stripped.startswith(("--", "//", "/*", "*")):
+            continue
+        tokens = _QUOTED.sub(" ", stripped).split()
+        if not tokens or any(not _sql_token_ok(token) for token in tokens):
+            return False
+    return saw_line
+
+
+def _explanation_lines_ok(lines) -> bool:
+    """Explanation lines are prose. A trailing assignment or path makes the response ambiguous."""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for token in _QUOTED.sub(" ", stripped).split():
+            bare = token.strip(".,;:()[]{}")
+            if not bare:
+                continue
+            if "/" in bare or _COMPACT_ASSIGNMENT.fullmatch(bare):
+                return False
+    return True
+
+
+def _extract_generated(text: str, dialect: str):
+    """Return (query, explanation) only when the provider used one unambiguous format."""
+    lines = text.splitlines()
+    label_at = None
+    for index, line in enumerate(lines):
+        lowered = line.strip().lower()
+        if lowered.startswith(("sql:", "query:", "mongodb:")):
+            label_at = index
+            break
+
+    if label_at is not None:
+        if any(line.strip() for line in lines[:label_at]):
+            return None
+        query_lines = [lines[label_at].split(":", 1)[1]]
+        explanation_lines = []
+        in_explanation = False
+        for line in lines[label_at + 1:]:
+            if not in_explanation and line.strip().lower().startswith("explanation:"):
+                in_explanation = True
+                explanation_lines.append(line.split(":", 1)[1])
+                continue
+            if in_explanation:
+                explanation_lines.append(line)
+            else:
+                query_lines.append(line)
+        query = "\n".join(query_lines)
+        query = re.sub(r"```(?:js|javascript|sql|mongodb)?", "", query, flags=re.IGNORECASE)
+        query = query.replace("```", "").strip()
+        if not _query_lines_ok(query, dialect) or not _accepted_query(query, dialect):
+            return None
+        if not _explanation_lines_ok(explanation_lines):
+            return None
+        explanation = " ".join(part.strip() for part in explanation_lines if part.strip())
+        return query, explanation or "Query generated successfully."
+
+    fence = re.search(
+        r"```(?:js|javascript|sql|mongodb)?\n(.*?)```",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if fence is None:
+        return None
+    outside = text[:fence.start()] + text[fence.end():]
+    if outside.strip():
+        return None
+    query = fence.group(1).strip().replace("```", "").strip()
+    if not _query_lines_ok(query, dialect) or not _accepted_query(query, dialect):
+        return None
+    return query, "Generated based on your question and schema."
 
 
 def _generation_error(explanation: str) -> TextToSqlResponse:
@@ -276,9 +398,8 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
     except ProviderTimeout:
         logger.warning("Gemini generation timed out")
         return _generation_error("AI generation timed out.")
-    except Exception as e:
-        error_str = str(e).lower()
-        if "429" in error_str or "quota" in error_str:
+    except Exception as exc:
+        if is_quota_error(exc):
             logger.warning("Gemini rate limit hit. Attempting Groq fallback.")
             groq_key = os.environ.get("GROQ_API_KEY")
             if groq_key:
@@ -300,8 +421,8 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
                 except ProviderTimeout:
                     logger.warning("Groq generation fallback timed out")
                     return _generation_error("AI generation timed out.")
-                except Exception:
-                    logger.exception("Groq fallback failed after a Gemini quota error")
+                except Exception as groq_exc:
+                    log_provider_failure(logger, "Groq generation fallback failed", groq_exc)
                     return _generation_error(
                         "AI generation failed after the fallback provider returned an error."
                     )
@@ -311,60 +432,17 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
                     "AI generation failed because the primary provider was unavailable and no fallback provider is configured."
                 )
         else:
-            logger.exception("Gemini generation failed")
+            log_provider_failure(logger, "Gemini generation failed", exc)
             return _generation_error("AI generation failed.")
 
     try:
-        query_part = ""
-        exp_part = ""
-
-        lines = text.split('\n')
-        current_section = None
-
-        for line in lines:
-            stripped = line.strip().lower()
-            # Accept both QUERY: (MongoDB) and SQL: (relational) prefixes
-            if stripped.startswith("query:") or stripped.startswith("sql:") or stripped.startswith("mongodb:"):
-                current_section = "query"
-                query_part += line.split(":", 1)[1].strip() + "\n"
-                continue
-            elif stripped.startswith("explanation:"):
-                current_section = "exp"
-                exp_part += line.split(":", 1)[1].strip() + " "
-                continue
-
-            if current_section == "query":
-                query_part += line + "\n"
-            elif current_section == "exp":
-                exp_part += line + " "
-
-        # Fallback 1: try to extract from a code fence block
-        if not query_part.strip():
-            code_fence_match = re.search(r'```(?:js|javascript|sql|mongodb)?\n(.*?)```', text, re.DOTALL | re.IGNORECASE)
-            if code_fence_match:
-                query_part = code_fence_match.group(1).strip()
-                exp_part = "Generated based on your question and schema."
-
-        # Fallback 2: use the full response if it looks like a query
-        if not query_part.strip():
-            query_indicators = ["select", "db.", "aggregate", "with ", "insert", "update", "delete"]
-            if any(indicator in text.lower() for indicator in query_indicators):
-                query_part = text
-                exp_part = "Generated based on your question."
-            else:
-                # True fallback to demo
-                if dialect == "mongodb":
-                    return generate_mongodb_demo(schema, question)
-                else:
-                    return generate_sql_demo(schema, question)
-
-        # Clean up any stray backticks
-        query_part = re.sub(r'```(?:js|javascript|sql|mongodb)?', '', query_part)
-        query_part = query_part.replace('```', '').strip()
+        extracted = _extract_generated(text, dialect)
+        if extracted is None:
+            return _generation_error("The model response could not be read.")
+        query_part, explanation = extracted
 
         # Run syntax validator for MongoDB queries
         warnings = validate_mongodb_query(query_part) if dialect == "mongodb" else []
-        explanation = exp_part.strip() or "Query generated successfully."
         if warnings:
             warning_block = "\n\n⚠️ AUTO-DETECTED ISSUES:\n" + "\n".join(f"  • {w}" for w in warnings)
             explanation += warning_block
@@ -375,8 +453,8 @@ Explanation: <step-by-step explanation of the query logic and design decisions>
             **reported_provenance(source, "none"),
         )
 
-    except Exception:
-        logger.exception("Failed to parse generation response")
+    except Exception as exc:
+        log_provider_failure(logger, "Failed to parse generation response", exc)
         return _generation_error("The model response could not be read.")
 
 

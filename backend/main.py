@@ -15,6 +15,12 @@ from socket_manager import manager
 from history_storage import get_history_storage
 from body_limit import BodySizeLimitMiddleware
 from rate_limit import RateLimitMiddleware, limiter
+from provider_errors import (
+    SAFE_ANALYSIS_MESSAGES,
+    SAFE_GENERATION_MESSAGES,
+    log_provider_failure,
+    public_provider_detail,
+)
 from safety_config import MAX_BODY_BYTES
 import logging
 import os
@@ -116,8 +122,8 @@ async def lifespan(app: FastAPI):
             genai.configure(api_key=api_key)
             _gemini_model = genai.GenerativeModel("gemini-flash-latest")
             print("--- Gemini model initialized successfully at startup ---")
-        except Exception as e:
-            print(f"Startup Error initializing Gemini model: {e}")
+        except Exception:
+            print("--- Gemini model failed to initialize; paid provider calls stay unavailable ---")
     else:
         print("--- No GEMINI_API_KEY found, running in demo mode ---")
     yield  # App runs here
@@ -196,6 +202,16 @@ def _demo_generation(schema_def: str, question: str, dialect: str):
     return generate_sql_demo(schema_def, question)
 
 
+def _provider_failure_response(result, allowed: frozenset, fallback: str):
+    """Turn a caught provider failure into a stable 502. Do not store it as a result."""
+    if getattr(result, "analysis_source", None) != "error":
+        return None
+    return HTTPException(
+        status_code=502,
+        detail=public_provider_detail(result.explanation, allowed, fallback),
+    )
+
+
 @app.post("/analyze", response_model=AnalysisResult)
 async def analyze_query_endpoint(
     request: AnalyzeRequest,
@@ -213,17 +229,21 @@ async def analyze_query_endpoint(
         else:
             raw_result = _demo_analysis(request.query, request.dialect)
         result = _coerce_analysis(raw_result)
-    except Exception:
-        logger.exception("Analysis failed")
-        raise HTTPException(status_code=500, detail="Analysis failed")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_provider_failure(logger, "Analysis failed", exc)
+        raise HTTPException(status_code=500, detail="Analysis failed") from None
+
+    failure = _provider_failure_response(result, SAFE_ANALYSIS_MESSAGES, "AI analysis failed.")
+    if failure is not None:
+        raise failure
 
     if history_enabled():
         try:
             get_history_storage().add_entry(result, dialect=request.dialect)
-        except Exception:
-            logger.exception(
-                "History persistence failed; returning the completed analysis"
-            )
+        except Exception as exc:
+            log_provider_failure(logger, "History persistence failed", exc)
 
     return result
 
@@ -237,13 +257,21 @@ async def generate_sql_endpoint(
     try:
         model = get_model() if access == "allowed" else None
         if model:
-            return await generate_sql_with_gemini(
+            result = await generate_sql_with_gemini(
                 request.schema_def, request.question, request.dialect, model
             )
-        return _demo_generation(request.schema_def, request.question, request.dialect)
-    except Exception:
-        logger.exception("SQL generation failed")
-        raise HTTPException(status_code=500, detail="SQL generation failed")
+        else:
+            result = _demo_generation(request.schema_def, request.question, request.dialect)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_provider_failure(logger, "SQL generation failed", exc)
+        raise HTTPException(status_code=500, detail="SQL generation failed") from None
+
+    failure = _provider_failure_response(result, SAFE_GENERATION_MESSAGES, "AI generation failed.")
+    if failure is not None:
+        raise failure
+    return result
 
 
 # --- WebSockets & CLI Agent Logic ---
@@ -275,7 +303,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         while True:
             # Messages from the simulated CLI. They are not database plans.
             data = await websocket.receive_text()
-            print(f"Received from Agent [{client_id}]: {data}")
+            logger.info("Agent frame received")
 
             # Parse the execution result from CLI
             try:
@@ -304,9 +332,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         )
 
             except json.JSONDecodeError:
-                print(f"Failed to parse execution result from client {client_id}")
-            except Exception as e:
-                print(f"Error processing execution result: {e}")
+                logger.warning("Agent execution result was not valid JSON")
+            except Exception as exc:
+                log_provider_failure(logger, "Agent execution result could not be processed", exc)
 
     except WebSocketDisconnect:
         manager.disconnect(client_id)
@@ -344,7 +372,7 @@ async def receive_execution_result(client_id: str, result: ExecutionResult):
         raise HTTPException(status_code=404, detail="Agent is disabled")
 
     # The payload is not checked against a database execution. Receipt only.
-    print(f"Received execution result from client {client_id}: {result}")
+    logger.info("Execution result received")
     return {"status": "success", "message": "Execution result received"}
 
 

@@ -262,7 +262,7 @@ def test_gemini_and_groq_generate_provenance(monkeypatch):
     assert groq_result.performance_measured is False
 
 
-def test_unparsed_model_text_falls_back_to_labeled_demo():
+def test_unparsed_model_text_is_a_provider_failure():
     async def run():
         from generator import generate_sql_with_gemini
 
@@ -270,6 +270,9 @@ def test_unparsed_model_text_falls_back_to_labeled_demo():
         return await generate_sql_with_gemini("CREATE TABLE users (id INT)", "list users", "postgresql", model)
 
     result = asyncio.run(run())
-    assert result.analysis_source == "demo"
+    assert result.analysis_source == "error"
     assert result.plan_origin == "none"
-    assert "[Demo Mode" in result.explanation
+    assert result.query == "ERROR"
+    assert result.explanation == "The model response could not be read."
+    assert "more information" not in result.query
+    assert "more information" not in result.explanation

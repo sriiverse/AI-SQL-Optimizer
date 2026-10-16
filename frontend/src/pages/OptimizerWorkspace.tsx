@@ -91,6 +91,72 @@ function formatAnalysisSource(source: unknown): string {
     }
 }
 
+const SAFE_SERVER_MESSAGES = new Set([
+    "Analysis failed",
+    "SQL generation failed",
+    "AI analysis failed.",
+    "AI analysis timed out.",
+    "AI generation failed.",
+    "AI generation timed out.",
+    "The model response could not be read.",
+    "AI analysis failed after the fallback provider returned an error.",
+    "AI generation failed after the fallback provider returned an error.",
+    "AI analysis failed because the primary provider was unavailable and no fallback provider is configured.",
+    "AI generation failed because the primary provider was unavailable and no fallback provider is configured.",
+    "Paid provider access is not authorized.",
+    "Rate limit exceeded. Try again later.",
+    "The analysis response was incomplete.",
+    "The generation response was incomplete.",
+    "The server returned a response that was not valid JSON.",
+])
+
+function displayErrorMessage(message: string): string {
+    const text = message.trim()
+    if (SAFE_SERVER_MESSAGES.has(text)) return text
+    return "The request could not be completed. Try again later."
+}
+
+function looksLikeExtractedQuery(query: string, isMongo: boolean): boolean {
+    const text = query.trim()
+    if (isMongo) return /^(?:db\.|\[|\{)/.test(text)
+    return /^(?:select|with|insert|update|delete)\b/i.test(text)
+}
+
+function sqlTokenOk(token: string): boolean {
+    const core = token.replace(/^[()[\]{},;]+|[()[\]{},;]+$/g, "")
+    if (!core) return true
+    if (/^[=<>!+\-*/%.,;:|&]+$/.test(core)) return true
+    if (/^\d+(?:\.\d+)?$/.test(core)) return true
+    if (/^\$?[A-Za-z_][\w$]*(?:\.[A-Za-z_$\d]+)*$/.test(core)) return true
+    if (/^\$?[A-Za-z_][\w$]*\([^();]{0,200}\)$/.test(core)) return true
+    return false
+}
+
+function generationIsDisplayable(query: string, explanation: string, isMongo: boolean): boolean {
+    const lines = query.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    if (lines.length === 0 || !looksLikeExtractedQuery(query, isMongo)) return false
+    const queryOk = isMongo
+        ? lines.every((line) => line.startsWith("//") || line.startsWith("db.") || /[[\]{}$]/.test(line))
+        : lines.every((line) => {
+            if (line.startsWith("--") || line.startsWith("/*") || line.startsWith("*") || line.startsWith("//")) return true
+            const scrubbed = line.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, " ")
+            const tokens = scrubbed.split(/\s+/).filter(Boolean)
+            return tokens.length > 0 && tokens.every(sqlTokenOk)
+        })
+    if (!queryOk) return false
+    for (const line of explanation.split(/\r?\n/)) {
+        const stripped = line.trim()
+        if (!stripped) continue
+        const scrubbed = stripped.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, " ")
+        for (const token of scrubbed.split(/\s+/)) {
+            const bare = token.replace(/^[.,;:()[\]{}]+|[.,;:()[\]{}]+$/g, "")
+            if (!bare) continue
+            if (bare.includes("/") || /^[A-Za-z_][A-Za-z0-9_]*=\S+$/.test(bare)) return false
+        }
+    }
+    return true
+}
+
 function messageFromErrorBody(data: unknown, status: number): string {
     if (data && typeof data === "object" && "detail" in data) {
         const detail = (data as { detail?: unknown }).detail
@@ -136,7 +202,9 @@ async function postJson(url: string, body: unknown): Promise<{ ok: true; data: u
     }
 
     if (!response.ok) {
-        return { ok: false, message: messageFromErrorBody(data, response.status) }
+        const message = messageFromErrorBody(data, response.status)
+        if (response.status === 422) return { ok: false, message }
+        return { ok: false, message: displayErrorMessage(message) }
     }
     return { ok: true, data }
 }
@@ -215,7 +283,7 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                 return
             }
             if (result.data.analysis_source === "error") {
-                setRequestError(result.data.explanation || "Analysis failed.")
+                setRequestError(displayErrorMessage(result.data.explanation || "Analysis failed."))
                 return
             }
             setAnalysisResult(result.data)
@@ -249,7 +317,11 @@ export default function OptimizerWorkspace({ mode }: OptimizerWorkspaceProps) {
                 return
             }
             if (result.data.analysis_source === "error") {
-                setRequestError(result.data.explanation || "SQL generation failed.")
+                setRequestError(displayErrorMessage(result.data.explanation || "SQL generation failed."))
+                return
+            }
+            if (!generationIsDisplayable(result.data.query, result.data.explanation, isMongo)) {
+                setRequestError("The request could not be completed. Try again later.")
                 return
             }
             setGeneratorResult(result.data)

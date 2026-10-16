@@ -1,6 +1,7 @@
 from typing import Optional
 
 from models import AnalysisResult, PlanNode, Suggestion, reported_provenance
+from provider_errors import is_quota_error, log_provider_failure
 from provider_timeout import ProviderTimeout, await_provider
 from safety_config import analysis_timeout_seconds
 import logging
@@ -184,9 +185,8 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
     except ProviderTimeout:
         logger.warning("Gemini analysis timed out")
         return _analysis_error(query, "AI analysis timed out.")
-    except Exception as e:
-        error_str = str(e).lower()
-        if "429" in error_str or "quota" in error_str:
+    except Exception as exc:
+        if is_quota_error(exc):
             logger.warning("Gemini rate limit hit. Attempting Groq fallback.")
             groq_key = os.environ.get("GROQ_API_KEY")
             if groq_key:
@@ -208,8 +208,8 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
                 except ProviderTimeout:
                     logger.warning("Groq analysis fallback timed out")
                     return _analysis_error(query, "AI analysis timed out.")
-                except Exception:
-                    logger.exception("Groq fallback failed after a Gemini quota error")
+                except Exception as groq_exc:
+                    log_provider_failure(logger, "Groq analysis fallback failed", groq_exc)
                     return _analysis_error(
                         query,
                         "AI analysis failed after the fallback provider returned an error.",
@@ -221,7 +221,7 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
                     "AI analysis failed because the primary provider was unavailable and no fallback provider is configured.",
                 )
         else:
-            logger.exception("Gemini analysis failed")
+            log_provider_failure(logger, "Gemini analysis failed", exc)
             return _analysis_error(query, "AI analysis failed.")
 
     try:
@@ -255,8 +255,8 @@ async def analyze_query_with_gemini(query: str, dialect: str, model: genai.Gener
             **reported_provenance(source, "synthetic"),
         )
         
-    except Exception:
-        logger.exception("Failed to parse analysis response")
+    except Exception as exc:
+        log_provider_failure(logger, "Failed to parse analysis response", exc)
         return _analysis_error(query, "The model response could not be read.")
 
 def analyze_query_demo(query: str) -> AnalysisResult:

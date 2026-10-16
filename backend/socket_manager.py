@@ -2,6 +2,8 @@ import logging
 from typing import Dict
 from fastapi import WebSocket
 
+from provider_errors import log_provider_failure
+
 logger = logging.getLogger(__name__)
 
 class ConnectionManager:
@@ -33,8 +35,8 @@ class ConnectionManager:
                 payload = json.dumps({"type": "EXECUTE", "query": query})
                 await websocket.send_text(payload)
                 return True
-            except Exception as e:
-                logger.error(f"Error sending payload to client {client_id}: {e}")
+            except Exception as exc:
+                log_provider_failure(logger, "Agent command could not be sent", exc)
                 self.disconnect(client_id)
                 return False
         return False
